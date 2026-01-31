@@ -41,11 +41,17 @@ Send input to a session. Appends newline by default.
 ishell send <name> <input> [--raw]
 ```
 
+**Normal mode** (default): Appends newline, sends as-is.
+
+**Raw mode** (`--raw`): No newline, interprets escape sequences.
+
 Examples:
 ```bash
-ishell send myshell "ls -la"           # send command
-ishell send pyrepl "print('hello')"    # send to Python
-ishell send myshell "\x03" --raw       # send Ctrl+C (no newline)
+ishell send myshell "ls -la"           # send command + newline
+ishell send pyrepl "print('hello')"    # send to Python + newline
+ishell send myshell "\x03" --raw       # send Ctrl+C
+ishell send myshell "\x04" --raw       # send Ctrl+D (EOF)
+ishell send myshell "y" --raw          # send 'y' without newline
 ```
 
 ### exec
@@ -65,10 +71,10 @@ Flags:
 
 Examples:
 ```bash
-ishell exec pyrepl "print('hello')"              # wait for output to settle
+ishell exec pyrepl "print('hello')"                # wait for output to settle
 ishell exec pyrepl "print('hello')" --settle 1000  # longer settle
-ishell exec myshell "ls" --wait '\$'             # wait for shell prompt
-ishell exec db "SELECT 1;" --strip-ansi --json   # clean JSON output
+ishell exec myshell "ls" --wait '\$'               # wait for shell prompt
+ishell exec db "SELECT 1;" --strip-ansi --json     # clean JSON output
 ```
 
 ### read
@@ -117,6 +123,54 @@ Kill a session.
 ishell kill <name>
 ```
 
+## Escape Sequences
+
+When using `send --raw`, escape sequences are interpreted:
+
+| Sequence | Character | Description |
+|----------|-----------|-------------|
+| `\x00`-`\xFF` | Any byte | Hex byte value |
+| `\n` | LF | Newline |
+| `\r` | CR | Carriage return |
+| `\t` | Tab | Horizontal tab |
+| `\e` | ESC | Escape (ASCII 27) |
+| `\\` | \ | Literal backslash |
+| `\0` | NUL | Null byte |
+
+### Common Control Characters
+
+| Sequence | Key | Effect |
+|----------|-----|--------|
+| `\x03` | Ctrl+C | Interrupt (SIGINT) |
+| `\x04` | Ctrl+D | End of file (EOF) |
+| `\x1a` | Ctrl+Z | Suspend (SIGTSTP) |
+| `\x1c` | Ctrl+\ | Quit (SIGQUIT) |
+| `\x0c` | Ctrl+L | Clear screen |
+| `\x09` | Ctrl+I / Tab | Tab character |
+
+### Examples
+
+```bash
+# Interrupt a long-running command
+ishell send myshell "\x03" --raw
+
+# Send EOF to close stdin
+ishell send myshell "\x04" --raw
+
+# Suspend a process
+ishell send myshell "\x1a" --raw
+
+# Tab completion
+ishell send myshell "doc\t" --raw
+
+# Answer a yes/no prompt without newline, then send newline
+ishell send myshell "y" --raw
+ishell send myshell ""              # just newline
+
+# Send escape sequence (e.g., for terminal commands)
+ishell send myshell "\e[2J" --raw   # clear screen (ANSI)
+```
+
 ## Architecture
 
 ishell uses a daemon process to maintain PTY handles across CLI invocations:
@@ -140,6 +194,9 @@ ishell exec session "echo hello" --json
 
 # Custom settle time for slow commands
 ishell exec session "slow_command" --settle 2000 --timeout 60
+
+# Interrupt a stuck command
+ishell send session "\x03" --raw
 ```
 
 Typical agent workflow:
@@ -153,4 +210,4 @@ ishell kill session
 
 ## Version
 
-v0.2.0
+v0.2.1
