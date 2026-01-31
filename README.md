@@ -1,4 +1,4 @@
-# shelli
+# 🐚 shelli - Persistent shell sessions for AI agents
 
 **Shell Interactive** - session manager for AI agents. Enables persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.) that survive across CLI invocations.
 
