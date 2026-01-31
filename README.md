@@ -1,6 +1,16 @@
-# 🐚 shelli - Persistent shell sessions for AI agents
+<p align="center">
+  <img src="docs/assets/icon-small.png" alt="shelli" width="120">
+</p>
 
-**Shell Interactive** - session manager for AI agents. Enables persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.) that survive across CLI invocations.
+<h1 align="center">shelli</h1>
+
+<p align="center">
+  <strong>Shell Interactive</strong> — Persistent shell sessions for AI agents
+</p>
+
+<p align="center">
+  Enables persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.) that survive across CLI invocations.
+</p>
 
 ## Installation
 
