@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"time"
 
-	"github.com/schovi/ishell/internal/ansi"
-	"github.com/schovi/ishell/internal/daemon"
+	"github.com/schovi/shelli/internal/ansi"
+	"github.com/schovi/shelli/internal/daemon"
 	"github.com/spf13/cobra"
 )
 

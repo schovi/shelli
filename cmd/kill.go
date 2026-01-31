@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/schovi/ishell/internal/daemon"
+	"github.com/schovi/shelli/internal/daemon"
 	"github.com/spf13/cobra"
 )
 

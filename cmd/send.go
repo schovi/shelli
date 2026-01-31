@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/schovi/ishell/internal/daemon"
-	"github.com/schovi/ishell/internal/escape"
+	"github.com/schovi/shelli/internal/daemon"
+	"github.com/schovi/shelli/internal/escape"
 	"github.com/spf13/cobra"
 )
 

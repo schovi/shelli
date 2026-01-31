@@ -47,7 +47,7 @@ func NewServer() (*Server, error) {
 		return nil, err
 	}
 
-	dataDir := filepath.Join(homeDir, ".ishell")
+	dataDir := filepath.Join(homeDir, ".shelli")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return nil, err
 	}
@@ -63,7 +63,7 @@ func NewServer() (*Server, error) {
 
 func SocketPath() string {
 	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".ishell", "ishell.sock")
+	return filepath.Join(homeDir, ".shelli", "shelli.sock")
 }
 
 func (s *Server) Start() error {

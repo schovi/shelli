@@ -1,18 +1,18 @@
-# ishell
+# shelli
 
-Interactive shell session manager for AI agents. Enables persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.) that survive across CLI invocations.
+**Shell Interactive** - session manager for AI agents. Enables persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.) that survive across CLI invocations.
 
 ## Installation
 
 ```bash
-go install github.com/schovi/ishell@latest
+go install github.com/schovi/shelli@latest
 ```
 
 Or build from source:
 ```bash
-git clone https://github.com/schovi/ishell
-cd ishell
-go build -o ishell .
+git clone https://github.com/schovi/shelli
+cd shelli
+go build -o shelli .
 ```
 
 ## Commands
@@ -22,15 +22,15 @@ go build -o ishell .
 Create a new interactive session.
 
 ```bash
-ishell create <name> [--cmd "command"] [--json]
+shelli create <name> [--cmd "command"] [--json]
 ```
 
 Examples:
 ```bash
-ishell create myshell                        # default shell
-ishell create pyrepl --cmd "python3"         # Python REPL
-ishell create db --cmd "psql -d mydb"        # PostgreSQL
-ishell create server --cmd "ssh user@host"   # SSH session
+shelli create myshell                        # default shell
+shelli create pyrepl --cmd "python3"         # Python REPL
+shelli create db --cmd "psql -d mydb"        # PostgreSQL
+shelli create server --cmd "ssh user@host"   # SSH session
 ```
 
 ### send
@@ -38,7 +38,7 @@ ishell create server --cmd "ssh user@host"   # SSH session
 Send input to a session. Appends newline by default.
 
 ```bash
-ishell send <name> <input> [--raw]
+shelli send <name> <input> [--raw]
 ```
 
 **Normal mode** (default): Appends newline, sends as-is.
@@ -47,11 +47,11 @@ ishell send <name> <input> [--raw]
 
 Examples:
 ```bash
-ishell send myshell "ls -la"           # send command + newline
-ishell send pyrepl "print('hello')"    # send to Python + newline
-ishell send myshell "\x03" --raw       # send Ctrl+C
-ishell send myshell "\x04" --raw       # send Ctrl+D (EOF)
-ishell send myshell "y" --raw          # send 'y' without newline
+shelli send myshell "ls -la"           # send command + newline
+shelli send pyrepl "print('hello')"    # send to Python + newline
+shelli send myshell "\x03" --raw       # send Ctrl+C
+shelli send myshell "\x04" --raw       # send Ctrl+D (EOF)
+shelli send myshell "y" --raw          # send 'y' without newline
 ```
 
 ### exec
@@ -59,7 +59,7 @@ ishell send myshell "y" --raw          # send 'y' without newline
 Send input and wait for result. The primary command for AI agents.
 
 ```bash
-ishell exec <name> <input> [flags]
+shelli exec <name> <input> [flags]
 ```
 
 Flags:
@@ -71,10 +71,10 @@ Flags:
 
 Examples:
 ```bash
-ishell exec pyrepl "print('hello')"                # wait for output to settle
-ishell exec pyrepl "print('hello')" --settle 1000  # longer settle
-ishell exec myshell "ls" --wait '\$'               # wait for shell prompt
-ishell exec db "SELECT 1;" --strip-ansi --json     # clean JSON output
+shelli exec pyrepl "print('hello')"                # wait for output to settle
+shelli exec pyrepl "print('hello')" --settle 1000  # longer settle
+shelli exec myshell "ls" --wait '\$'               # wait for shell prompt
+shelli exec db "SELECT 1;" --strip-ansi --json     # clean JSON output
 ```
 
 ### read
@@ -82,7 +82,7 @@ ishell exec db "SELECT 1;" --strip-ansi --json     # clean JSON output
 Read output from a session.
 
 ```bash
-ishell read <name> [flags]
+shelli read <name> [flags]
 ```
 
 **Instant modes** (non-blocking):
@@ -100,11 +100,11 @@ Other flags:
 
 Examples:
 ```bash
-ishell read myshell                    # new output, instant
-ishell read myshell --all              # all output, instant
-ishell read pyrepl --wait ">>>"        # wait for Python prompt
-ishell read myshell --settle 300       # wait for 300ms silence
-ishell read myshell --strip-ansi       # clean output
+shelli read myshell                    # new output, instant
+shelli read myshell --all              # all output, instant
+shelli read pyrepl --wait ">>>"        # wait for Python prompt
+shelli read myshell --settle 300       # wait for 300ms silence
+shelli read myshell --strip-ansi       # clean output
 ```
 
 ### list
@@ -112,7 +112,7 @@ ishell read myshell --strip-ansi       # clean output
 List all sessions.
 
 ```bash
-ishell list [--json]
+shelli list [--json]
 ```
 
 ### kill
@@ -120,7 +120,7 @@ ishell list [--json]
 Kill a session.
 
 ```bash
-ishell kill <name>
+shelli kill <name>
 ```
 
 ## Escape Sequences
@@ -152,32 +152,32 @@ When using `send --raw`, escape sequences are interpreted:
 
 ```bash
 # Interrupt a long-running command
-ishell send myshell "\x03" --raw
+shelli send myshell "\x03" --raw
 
 # Send EOF to close stdin
-ishell send myshell "\x04" --raw
+shelli send myshell "\x04" --raw
 
 # Suspend a process
-ishell send myshell "\x1a" --raw
+shelli send myshell "\x1a" --raw
 
 # Tab completion
-ishell send myshell "doc\t" --raw
+shelli send myshell "doc\t" --raw
 
 # Answer a yes/no prompt without newline, then send newline
-ishell send myshell "y" --raw
-ishell send myshell ""              # just newline
+shelli send myshell "y" --raw
+shelli send myshell ""              # just newline
 
 # Send escape sequence (e.g., for terminal commands)
-ishell send myshell "\e[2J" --raw   # clear screen (ANSI)
+shelli send myshell "\e[2J" --raw   # clear screen (ANSI)
 ```
 
 ## Architecture
 
-ishell uses a daemon process to maintain PTY handles across CLI invocations:
+shelli uses a daemon process to maintain PTY handles across CLI invocations:
 
 - First command auto-starts the daemon if not running
 - Daemon holds all PTY handles in memory
-- CLI commands communicate via Unix socket (`~/.ishell/ishell.sock`)
+- CLI commands communicate via Unix socket (`~/.shelli/shelli.sock`)
 - Output is buffered with read position tracking
 
 ## For AI Agents
@@ -186,28 +186,49 @@ The `exec` command is designed for AI agent workflows:
 
 ```bash
 # Simple command execution
-ishell exec session "ls -la" --strip-ansi
+shelli exec session "ls -la" --strip-ansi
 
 # With JSON for parsing
-ishell exec session "echo hello" --json
+shelli exec session "echo hello" --json
 # {"input":"echo hello","output":"hello\n","position":123}
 
 # Custom settle time for slow commands
-ishell exec session "slow_command" --settle 2000 --timeout 60
+shelli exec session "slow_command" --settle 2000 --timeout 60
 
 # Interrupt a stuck command
-ishell send session "\x03" --raw
+shelli send session "\x03" --raw
 ```
 
 Typical agent workflow:
 ```bash
-ishell create session --cmd "python3"
-ishell exec session "x = 42"
-ishell exec session "print(x * 2)" --strip-ansi
+shelli create session --cmd "python3"
+shelli exec session "x = 42"
+shelli exec session "print(x * 2)" --strip-ansi
 # Output: 84
-ishell kill session
+shelli kill session
 ```
+
+## Limitations
+
+### TUI Applications
+
+shelli does **not** support full-screen TUI applications like `k9s`, `btop`, `htop`, `vim`, `nano`, etc.
+
+These apps don't produce line-based output - they paint a 2D screen using cursor positioning and ANSI escape sequences. The raw output is screen-drawing instructions, not readable content.
+
+**Workarounds:**
+- Use the underlying CLI tools instead:
+  - `k9s` → `kubectl get pods`, `kubectl describe pod`
+  - `btop`/`htop` → `ps aux`, `top -bn1`
+  - `vim` → `sed`, `awk`, or direct file manipulation
+- For apps with no CLI alternative, consider using them outside shelli
+
+shelli works best with:
+- REPLs (Python, Node, Ruby, etc.)
+- Database CLIs (psql, mysql, sqlite3)
+- SSH sessions (for running commands on remote hosts)
+- Any tool that produces line-based text output
 
 ## Version
 
-v0.2.1
+v0.3.0

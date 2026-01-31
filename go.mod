@@ -1,4 +1,4 @@
-module github.com/schovi/ishell
+module github.com/schovi/shelli
 
 go 1.25.5
 

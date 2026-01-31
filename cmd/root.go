@@ -7,9 +7,9 @@ import (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "ishell",
-	Short: "Interactive shell session manager for AI agents",
-	Long:  `ishell enables AI agents to interact with persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.)`,
+	Use:   "shelli",
+	Short: "Shell Interactive - session manager for AI agents",
+	Long:  `shelli (Shell Interactive) enables AI agents to interact with persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.)`,
 }
 
 func Execute() {
