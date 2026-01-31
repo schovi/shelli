@@ -34,11 +34,11 @@ Common control characters:
   \x0c  Ctrl+L (clear screen)
 
 Examples:
-  ishell send session "ls -la"           # normal command
-  ishell send session "\x03" --raw       # send Ctrl+C
-  ishell send session "\x04" --raw       # send Ctrl+D (EOF)
-  ishell send session "y" --raw          # send 'y' without newline
-  ishell send session "user\tname" --raw # send with tab`,
+  shelli send session "ls -la"           # normal command
+  shelli send session "\x03" --raw       # send Ctrl+C
+  shelli send session "\x04" --raw       # send Ctrl+D (EOF)
+  shelli send session "y" --raw          # send 'y' without newline
+  shelli send session "user\tname" --raw # send with tab`,
 	Args: cobra.MinimumNArgs(2),
 	RunE: runSend,
 }

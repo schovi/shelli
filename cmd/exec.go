@@ -3,12 +3,11 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
-	"regexp"
 	"strings"
-	"time"
 
 	"github.com/schovi/shelli/internal/ansi"
 	"github.com/schovi/shelli/internal/daemon"
+	"github.com/schovi/shelli/internal/wait"
 	"github.com/spf13/cobra"
 )
 
@@ -55,18 +54,15 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daemon: %w", err)
 	}
 
-	// Get current position before sending
 	_, startPos, err := client.Read(name, "all")
 	if err != nil {
 		return err
 	}
 
-	// Send input with newline
 	if err := client.Send(name, input, true); err != nil {
 		return err
 	}
 
-	// Determine wait mode
 	var pattern string
 	var settleMs int
 
@@ -78,8 +74,15 @@ func runExec(cmd *cobra.Command, args []string) error {
 		settleMs = execSettleFlag
 	}
 
-	// Wait for result
-	output, pos, err := execBlockingRead(client, name, startPos, pattern, settleMs, execTimeoutFlag)
+	output, pos, err := wait.ForOutput(
+		func() (string, int, error) { return client.Read(name, "all") },
+		wait.Config{
+			Pattern:       pattern,
+			SettleMs:      settleMs,
+			TimeoutSec:    execTimeoutFlag,
+			StartPosition: startPos,
+		},
+	)
 	if err != nil {
 		return err
 	}
@@ -94,73 +97,14 @@ func runExec(cmd *cobra.Command, args []string) error {
 			"output":   output,
 			"position": pos,
 		}
-		data, _ := json.MarshalIndent(out, "", "  ")
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal output: %w", err)
+		}
 		fmt.Println(string(data))
 	} else {
 		fmt.Print(output)
 	}
 
 	return nil
-}
-
-func execBlockingRead(client *daemon.Client, name string, startPos int, pattern string, settleMs, timeoutSec int) (string, int, error) {
-	var re *regexp.Regexp
-	if pattern != "" {
-		var err error
-		re, err = regexp.Compile(pattern)
-		if err != nil {
-			return "", 0, fmt.Errorf("invalid pattern: %w", err)
-		}
-	}
-
-	timeout := time.Duration(timeoutSec) * time.Second
-	deadline := time.Now().Add(timeout)
-	pollInterval := 50 * time.Millisecond
-	settleDuration := time.Duration(settleMs) * time.Millisecond
-
-	var lastPos int = startPos
-	var lastChangeTime = time.Now()
-
-	for time.Now().Before(deadline) {
-		output, pos, err := client.Read(name, "all")
-		if err != nil {
-			return "", 0, err
-		}
-
-		// Check for new output
-		if pos != lastPos {
-			lastPos = pos
-			lastChangeTime = time.Now()
-		}
-
-		// Get output since send
-		newOutput := ""
-		if pos > startPos {
-			newOutput = output[startPos:]
-		}
-
-		// Pattern mode: check if pattern matches in new output
-		if re != nil && re.MatchString(newOutput) {
-			return newOutput, pos, nil
-		}
-
-		// Settle mode: check if output has settled
-		if settleMs > 0 && pos > startPos && time.Since(lastChangeTime) >= settleDuration {
-			return newOutput, pos, nil
-		}
-
-		time.Sleep(pollInterval)
-	}
-
-	// Timeout - get final output
-	output, pos, _ := client.Read(name, "all")
-	newOutput := ""
-	if pos > startPos {
-		newOutput = output[startPos:]
-	}
-
-	if re != nil {
-		return newOutput, pos, fmt.Errorf("timeout waiting for pattern %q", pattern)
-	}
-	return newOutput, pos, fmt.Errorf("timeout waiting for output to settle")
 }

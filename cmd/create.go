@@ -37,7 +37,10 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	if createJsonFlag {
-		out, _ := json.MarshalIndent(data, "", "  ")
+		out, err := json.MarshalIndent(data, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal output: %w", err)
+		}
 		fmt.Println(string(out))
 	} else {
 		fmt.Printf("Created session %q (pid: %.0f, cmd: %s)\n",

@@ -32,7 +32,10 @@ func runList(cmd *cobra.Command, args []string) error {
 	}
 
 	if listJsonFlag {
-		data, _ := json.MarshalIndent(sessions, "", "  ")
+		data, err := json.MarshalIndent(sessions, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal output: %w", err)
+		}
 		fmt.Println(string(data))
 	} else {
 		if len(sessions) == 0 {

@@ -32,16 +32,26 @@ type SessionInfo struct {
 }
 
 type Server struct {
-	mu       sync.Mutex
-	sessions map[string]*Session
-	ptys     map[string]*os.File
-	cmds     map[string]*exec.Cmd
-	outputs  map[string][]byte
-	dataDir  string
-	listener net.Listener
+	mu            sync.Mutex
+	sessions      map[string]*Session
+	ptys          map[string]*os.File
+	cmds          map[string]*exec.Cmd
+	outputs       map[string][]byte
+	doneChans     map[string]chan struct{}
+	dataDir       string
+	listener      net.Listener
+	maxOutputSize int
 }
 
-func NewServer() (*Server, error) {
+type ServerOption func(*Server)
+
+func WithMaxOutputSize(size int) ServerOption {
+	return func(s *Server) {
+		s.maxOutputSize = size
+	}
+}
+
+func NewServer(opts ...ServerOption) (*Server, error) {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -52,13 +62,21 @@ func NewServer() (*Server, error) {
 		return nil, err
 	}
 
-	return &Server{
-		sessions: make(map[string]*Session),
-		ptys:     make(map[string]*os.File),
-		cmds:     make(map[string]*exec.Cmd),
-		outputs:  make(map[string][]byte),
-		dataDir:  dataDir,
-	}, nil
+	s := &Server{
+		sessions:      make(map[string]*Session),
+		ptys:          make(map[string]*os.File),
+		cmds:          make(map[string]*exec.Cmd),
+		outputs:       make(map[string][]byte),
+		doneChans:     make(map[string]chan struct{}),
+		dataDir:       dataDir,
+		maxOutputSize: DefaultMaxOutputSize,
+	}
+
+	for _, opt := range opts {
+		opt(s)
+	}
+
+	return s, nil
 }
 
 func SocketPath() string {
@@ -79,10 +97,36 @@ func (s *Server) Start() error {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
+			if s.listener == nil {
+				return nil
+			}
 			return err
 		}
 		go s.handleConn(conn)
 	}
+}
+
+func (s *Server) Shutdown() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for name := range s.sessions {
+		if done, ok := s.doneChans[name]; ok {
+			close(done)
+		}
+		if ptmx, ok := s.ptys[name]; ok {
+			ptmx.Close()
+		}
+		if cmd, ok := s.cmds[name]; ok {
+			cmd.Process.Kill()
+		}
+	}
+
+	if s.listener != nil {
+		s.listener.Close()
+		s.listener = nil
+	}
+	os.Remove(SocketPath())
 }
 
 type Request struct {
@@ -92,8 +136,6 @@ type Request struct {
 	Input   string `json:"input,omitempty"`
 	Newline bool   `json:"newline,omitempty"`
 	Mode    string `json:"mode,omitempty"`
-	Pattern string `json:"pattern,omitempty"`
-	Timeout int    `json:"timeout,omitempty"`
 }
 
 type Response struct {
@@ -177,6 +219,7 @@ func (s *Server) handleCreate(req Request) Response {
 	s.ptys[req.Name] = ptmx
 	s.cmds[req.Name] = cmd
 	s.outputs[req.Name] = []byte{}
+	s.doneChans[req.Name] = make(chan struct{})
 
 	go s.captureOutput(req.Name, ptmx, cmd)
 
@@ -189,15 +232,33 @@ func (s *Server) handleCreate(req Request) Response {
 }
 
 func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
-	buf := make([]byte, 4096)
+	s.mu.Lock()
+	done := s.doneChans[name]
+	s.mu.Unlock()
+
+	buf := make([]byte, ReadBufferSize)
 	for {
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		n, err := ptmx.Read(buf)
 		if n > 0 {
 			s.mu.Lock()
 			s.outputs[name] = append(s.outputs[name], buf[:n]...)
+			if len(s.outputs[name]) > s.maxOutputSize {
+				excess := len(s.outputs[name]) - s.maxOutputSize
+				s.outputs[name] = s.outputs[name][excess:]
+				if sess, ok := s.sessions[name]; ok && sess.ReadPos > 0 {
+					sess.ReadPos = max(0, sess.ReadPos-excess)
+				}
+			}
 			s.mu.Unlock()
 		}
-		if err != nil {
+		if err != nil && !isTimeout(err) {
 			break
 		}
 	}
@@ -208,7 +269,15 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	s.mu.Lock()
 	delete(s.ptys, name)
 	delete(s.cmds, name)
+	delete(s.doneChans, name)
 	s.mu.Unlock()
+}
+
+func isTimeout(err error) bool {
+	if netErr, ok := err.(interface{ Timeout() bool }); ok {
+		return netErr.Timeout()
+	}
+	return false
 }
 
 func (s *Server) handleList() Response {
@@ -296,6 +365,11 @@ func (s *Server) handleKill(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 
+	if done, ok := s.doneChans[req.Name]; ok {
+		close(done)
+		delete(s.doneChans, req.Name)
+	}
+
 	if ptmx, ok := s.ptys[req.Name]; ok {
 		ptmx.Close()
 		delete(s.ptys, req.Name)
@@ -309,7 +383,7 @@ func (s *Server) handleKill(req Request) Response {
 	proc, err := os.FindProcess(sess.PID)
 	if err == nil {
 		proc.Signal(syscall.SIGTERM)
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(KillGracePeriod)
 		proc.Signal(syscall.SIGKILL)
 	}
 

@@ -34,8 +34,9 @@ func (c *Client) EnsureDaemon() error {
 		return fmt.Errorf("start daemon: %w", err)
 	}
 
-	for i := 0; i < 50; i++ {
-		time.Sleep(100 * time.Millisecond)
+	deadline := time.Now().Add(DaemonStartTimeout)
+	for time.Now().Before(deadline) {
+		time.Sleep(DaemonPollInterval)
 		if c.Ping() {
 			return nil
 		}
@@ -61,7 +62,7 @@ func (c *Client) Create(name, command string) (map[string]interface{}, error) {
 	if !resp.Success {
 		return nil, fmt.Errorf("%s", resp.Error)
 	}
-	return resp.Data.(map[string]interface{}), nil
+	return extractMapData(resp)
 }
 
 func (c *Client) List() ([]SessionInfo, error) {
@@ -92,10 +93,20 @@ func (c *Client) Read(name, mode string) (string, int, error) {
 		return "", 0, fmt.Errorf("%s", resp.Error)
 	}
 
-	data := resp.Data.(map[string]interface{})
-	output := data["output"].(string)
-	position := int(data["position"].(float64))
-	return output, position, nil
+	data, err := extractMapData(resp)
+	if err != nil {
+		return "", 0, err
+	}
+
+	output, ok := data["output"].(string)
+	if !ok {
+		return "", 0, fmt.Errorf("missing or invalid output field")
+	}
+	posFloat, ok := data["position"].(float64)
+	if !ok {
+		return "", 0, fmt.Errorf("missing or invalid position field")
+	}
+	return output, int(posFloat), nil
 }
 
 func (c *Client) Send(name, input string, newline bool) error {
@@ -135,7 +146,7 @@ func (c *Client) send(req Request) (*Response, error) {
 	}
 	defer conn.Close()
 
-	conn.SetDeadline(time.Now().Add(30 * time.Second))
+	conn.SetDeadline(time.Now().Add(ClientDeadline))
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return nil, err
@@ -147,4 +158,15 @@ func (c *Client) send(req Request) (*Response, error) {
 	}
 
 	return &resp, nil
+}
+
+func extractMapData(resp *Response) (map[string]interface{}, error) {
+	if resp.Data == nil {
+		return nil, fmt.Errorf("response has no data")
+	}
+	data, ok := resp.Data.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("unexpected response format: %T", resp.Data)
+	}
+	return data, nil
 }
