@@ -43,6 +43,7 @@ brews:
   - repository:
       owner: schovi
       name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: https://github.com/schovi/shelli
     description: Persistent interactive shell sessions via PTY
     license: MIT
