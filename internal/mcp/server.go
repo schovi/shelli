@@ -134,7 +134,7 @@ func (s *Server) handleInitialize(req *Request) {
 		},
 	}
 	result.ServerInfo.Name = "shelli"
-	result.ServerInfo.Version = "0.3.0"
+	result.ServerInfo.Version = "0.2.0"
 
 	s.sendResult(req.ID, result)
 }
