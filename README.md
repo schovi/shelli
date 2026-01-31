@@ -15,63 +15,106 @@ cd ishell
 go build -o ishell .
 ```
 
-## Usage
+## Commands
 
-### Create a session
+### create
+
+Create a new interactive session.
 
 ```bash
-# Default shell
-ishell create myshell
-
-# Specific command
-ishell create pyrepl --cmd "python3"
-ishell create psql --cmd "psql -d mydb"
+ishell create <name> [--cmd "command"] [--json]
 ```
 
-### Send input
-
+Examples:
 ```bash
-# Send without newline
-ishell send myshell "partial input"
-
-# Send with newline (execute command)
-ishell sendline pyrepl 'print("hello")'
+ishell create myshell                        # default shell
+ishell create pyrepl --cmd "python3"         # Python REPL
+ishell create db --cmd "psql -d mydb"        # PostgreSQL
+ishell create server --cmd "ssh user@host"   # SSH session
 ```
 
-### Read output
+### send
+
+Send input to a session. Appends newline by default.
 
 ```bash
-# Read new output since last read
-ishell read myshell
-
-# Read all output
-ishell read myshell --mode all
-
-# JSON output for programmatic use
-ishell read myshell --json
+ishell send <name> <input> [--raw]
 ```
 
-### Wait for pattern
-
+Examples:
 ```bash
-# Wait for Python prompt
-ishell wait pyrepl ">>>"
-
-# Wait with timeout
-ishell wait myshell "completed" --timeout 60
+ishell send myshell "ls -la"           # send command
+ishell send pyrepl "print('hello')"    # send to Python
+ishell send myshell "\x03" --raw       # send Ctrl+C (no newline)
 ```
 
-### List sessions
+### exec
+
+Send input and wait for result. The primary command for AI agents.
 
 ```bash
-ishell list
-ishell list --json
+ishell exec <name> <input> [flags]
 ```
 
-### Kill a session
+Flags:
+- `--settle N` - Wait for N ms of silence (default: 500)
+- `--wait "pattern"` - Wait for regex pattern match (mutually exclusive with --settle)
+- `--timeout N` - Max wait time in seconds (default: 10)
+- `--strip-ansi` - Remove terminal escape codes
+- `--json` - Output as JSON
+
+Examples:
+```bash
+ishell exec pyrepl "print('hello')"              # wait for output to settle
+ishell exec pyrepl "print('hello')" --settle 1000  # longer settle
+ishell exec myshell "ls" --wait '\$'             # wait for shell prompt
+ishell exec db "SELECT 1;" --strip-ansi --json   # clean JSON output
+```
+
+### read
+
+Read output from a session.
 
 ```bash
-ishell kill myshell
+ishell read <name> [flags]
+```
+
+**Instant modes** (non-blocking):
+- (default) - New output since last read
+- `--all` - All output from session start
+
+**Blocking modes** (returns new output):
+- `--wait "pattern"` - Wait for regex pattern match
+- `--settle N` - Wait for N ms of silence
+
+Other flags:
+- `--timeout N` - Max wait time in seconds (default: 10)
+- `--strip-ansi` - Remove terminal escape codes
+- `--json` - Output as JSON
+
+Examples:
+```bash
+ishell read myshell                    # new output, instant
+ishell read myshell --all              # all output, instant
+ishell read pyrepl --wait ">>>"        # wait for Python prompt
+ishell read myshell --settle 300       # wait for 300ms silence
+ishell read myshell --strip-ansi       # clean output
+```
+
+### list
+
+List all sessions.
+
+```bash
+ishell list [--json]
+```
+
+### kill
+
+Kill a session.
+
+```bash
+ishell kill <name>
 ```
 
 ## Architecture
@@ -80,27 +123,34 @@ ishell uses a daemon process to maintain PTY handles across CLI invocations:
 
 - First command auto-starts the daemon if not running
 - Daemon holds all PTY handles in memory
-- CLI commands communicate with daemon via Unix socket (`~/.ishell/ishell.sock`)
-- Session output is buffered in memory with read position tracking
+- CLI commands communicate via Unix socket (`~/.ishell/ishell.sock`)
+- Output is buffered with read position tracking
 
 ## For AI Agents
 
-JSON output mode (`--json`) provides structured output for programmatic use:
+The `exec` command is designed for AI agent workflows:
 
 ```bash
-# Create and parse response
-ishell create test --cmd "python3" --json
-# {"name":"test","pid":12345,"command":"python3","created_at":"..."}
+# Simple command execution
+ishell exec session "ls -la" --strip-ansi
 
-# Read with position tracking
-ishell read test --json
-# {"output":"...","position":1234}
+# With JSON for parsing
+ishell exec session "echo hello" --json
+# {"input":"echo hello","output":"hello\n","position":123}
 
-# Wait with match status
-ishell wait test ">>>" --json
-# {"matched":true,"output":"...","position":1234}
+# Custom settle time for slow commands
+ishell exec session "slow_command" --settle 2000 --timeout 60
+```
+
+Typical agent workflow:
+```bash
+ishell create session --cmd "python3"
+ishell exec session "x = 42"
+ishell exec session "print(x * 2)" --strip-ansi
+# Output: 84
+ishell kill session
 ```
 
 ## Version
 
-v0.1.0 - Core functionality
+v0.2.0
