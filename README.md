@@ -14,15 +14,24 @@
 
 ## Installation
 
+### Homebrew (macOS/Linux)
+
+```bash
+brew install schovi/tap/shelli
+```
+
+### Go
+
 ```bash
 go install github.com/schovi/shelli@latest
 ```
 
-Or build from source:
+### From Source
+
 ```bash
 git clone https://github.com/schovi/shelli
 cd shelli
-go build -o shelli .
+make build
 ```
 
 ## Claude Code Integration
@@ -305,6 +314,15 @@ These apps paint 2D screens using cursor positioning, not line-based output.
 - SSH sessions
 - Any tool that produces line-based text output
 
+## Development
+
+```bash
+make build      # Build binary
+make test       # Run tests
+make lint       # Run golangci-lint
+make security   # Run gosec + govulncheck
+```
+
 ## Version
 
-v0.4.0
+v0.1.0
