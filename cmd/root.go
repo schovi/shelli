@@ -24,7 +24,6 @@ func init() {
 	rootCmd.AddCommand(listCmd)
 	rootCmd.AddCommand(readCmd)
 	rootCmd.AddCommand(sendCmd)
-	rootCmd.AddCommand(sendlineCmd)
 	rootCmd.AddCommand(waitCmd)
 	rootCmd.AddCommand(killCmd)
 }

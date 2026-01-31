@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/schovi/ishell/internal/ansi"
 	"github.com/schovi/ishell/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -17,10 +18,12 @@ var readCmd = &cobra.Command{
 
 var readModeFlag string
 var readJsonFlag bool
+var readStripAnsiFlag bool
 
 func init() {
 	readCmd.Flags().StringVar(&readModeFlag, "mode", "new", "Read mode: all|new")
 	readCmd.Flags().BoolVar(&readJsonFlag, "json", false, "Output as JSON")
+	readCmd.Flags().BoolVar(&readStripAnsiFlag, "strip-ansi", false, "Strip ANSI escape codes")
 }
 
 func runRead(cmd *cobra.Command, args []string) error {
@@ -34,6 +37,10 @@ func runRead(cmd *cobra.Command, args []string) error {
 	output, pos, err := client.Read(name, readModeFlag)
 	if err != nil {
 		return err
+	}
+
+	if readStripAnsiFlag {
+		output = ansi.Strip(output)
 	}
 
 	if readJsonFlag {

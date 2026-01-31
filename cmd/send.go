@@ -10,32 +10,29 @@ import (
 
 var sendCmd = &cobra.Command{
 	Use:   "send <name> <input>",
-	Short: "Send input to a session (no newline)",
-	Args:  cobra.MinimumNArgs(2),
-	RunE:  runSend,
+	Short: "Send input to a session (newline by default)",
+	Long: `Send input to a session. Appends newline by default.
+Use --raw to send without newline (for control characters like Ctrl+C).`,
+	Args: cobra.MinimumNArgs(2),
+	RunE: runSend,
 }
 
-var sendlineCmd = &cobra.Command{
-	Use:   "sendline <name> <input>",
-	Short: "Send input to a session with newline",
-	Args:  cobra.MinimumNArgs(2),
-	RunE:  runSendline,
+var sendRawFlag bool
+
+func init() {
+	sendCmd.Flags().BoolVar(&sendRawFlag, "raw", false, "Send without newline (for control chars)")
 }
 
 func runSend(cmd *cobra.Command, args []string) error {
-	return doSend(args[0], strings.Join(args[1:], " "), false)
-}
+	name := args[0]
+	input := strings.Join(args[1:], " ")
 
-func runSendline(cmd *cobra.Command, args []string) error {
-	return doSend(args[0], strings.Join(args[1:], " "), true)
-}
-
-func doSend(name, input string, newline bool) error {
 	client := daemon.NewClient()
 	if err := client.EnsureDaemon(); err != nil {
 		return fmt.Errorf("daemon: %w", err)
 	}
 
+	newline := !sendRawFlag
 	if err := client.Send(name, input, newline); err != nil {
 		return err
 	}
