@@ -25,6 +25,65 @@ cd shelli
 go build -o shelli .
 ```
 
+## Claude Code Integration
+
+shelli integrates with Claude Code in two ways: as a **Claude Plugin** (teaches Claude when and how to use shelli) and as an **MCP server** (provides native tool integration).
+
+### MCP Server Setup
+
+Add shelli as an MCP server in `~/.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "shelli": {
+      "command": "shelli",
+      "args": ["daemon", "--mcp"]
+    }
+  }
+}
+```
+
+This exposes 6 MCP tools to Claude:
+- `shelli/create` - Create a new session
+- `shelli/exec` - Send input and wait for output (primary tool)
+- `shelli/send` - Send input without waiting
+- `shelli/read` - Read session output
+- `shelli/list` - List active sessions
+- `shelli/kill` - Terminate a session
+
+### Plugin Installation
+
+Install the shelli plugin to teach Claude when to use persistent sessions:
+
+```bash
+claude plugins add schovi/shelli
+```
+
+The plugin includes:
+- **Core skill**: Complete shelli command reference, escape sequences, best practices
+- **Auto-detector**: Recognizes when shelli is needed (SSH, REPLs, databases, stateful workflows)
+- **`/shelli` command**: Explicit entry point for forcing shelli usage
+
+With both MCP and plugin installed, Claude will:
+1. Automatically detect when persistent sessions are needed
+2. Use MCP tools for structured interaction
+3. Handle session lifecycle (create, use, cleanup)
+
+### Example Interaction
+
+```
+User: "SSH to server.example.com and check disk usage"
+
+Claude: [creates SSH session via MCP, waits for prompt, runs df -h]
+```
+
+```
+User: "Start Python and help me explore this CSV"
+
+Claude: [creates python3 session, imports pandas, loads file interactively]
+```
+
 ## Commands
 
 ### create
@@ -41,27 +100,6 @@ shelli create myshell                        # default shell
 shelli create pyrepl --cmd "python3"         # Python REPL
 shelli create db --cmd "psql -d mydb"        # PostgreSQL
 shelli create server --cmd "ssh user@host"   # SSH session
-```
-
-### send
-
-Send input to a session. Appends newline by default.
-
-```bash
-shelli send <name> <input> [--raw]
-```
-
-**Normal mode** (default): Appends newline, sends as-is.
-
-**Raw mode** (`--raw`): No newline, interprets escape sequences.
-
-Examples:
-```bash
-shelli send myshell "ls -la"           # send command + newline
-shelli send pyrepl "print('hello')"    # send to Python + newline
-shelli send myshell "\x03" --raw       # send Ctrl+C
-shelli send myshell "\x04" --raw       # send Ctrl+D (EOF)
-shelli send myshell "y" --raw          # send 'y' without newline
 ```
 
 ### exec
@@ -85,6 +123,27 @@ shelli exec pyrepl "print('hello')"                # wait for output to settle
 shelli exec pyrepl "print('hello')" --settle 1000  # longer settle
 shelli exec myshell "ls" --wait '\$'               # wait for shell prompt
 shelli exec db "SELECT 1;" --strip-ansi --json     # clean JSON output
+```
+
+### send
+
+Send input to a session. Appends newline by default.
+
+```bash
+shelli send <name> <input> [--raw]
+```
+
+**Normal mode** (default): Appends newline, sends as-is.
+
+**Raw mode** (`--raw`): No newline, interprets escape sequences.
+
+Examples:
+```bash
+shelli send myshell "ls -la"           # send command + newline
+shelli send pyrepl "print('hello')"    # send to Python + newline
+shelli send myshell "\x03" --raw       # send Ctrl+C
+shelli send myshell "\x04" --raw       # send Ctrl+D (EOF)
+shelli send myshell "y" --raw          # send 'y' without newline
 ```
 
 ### read
@@ -114,7 +173,6 @@ shelli read myshell                    # new output, instant
 shelli read myshell --all              # all output, instant
 shelli read pyrepl --wait ">>>"        # wait for Python prompt
 shelli read myshell --settle 300       # wait for 300ms silence
-shelli read myshell --strip-ansi       # clean output
 ```
 
 ### list
@@ -167,55 +225,65 @@ shelli send myshell "\x03" --raw
 # Send EOF to close stdin
 shelli send myshell "\x04" --raw
 
-# Suspend a process
-shelli send myshell "\x1a" --raw
-
 # Tab completion
 shelli send myshell "doc\t" --raw
 
 # Answer a yes/no prompt without newline, then send newline
 shelli send myshell "y" --raw
 shelli send myshell ""              # just newline
-
-# Send escape sequence (e.g., for terminal commands)
-shelli send myshell "\e[2J" --raw   # clear screen (ANSI)
 ```
 
 ## Architecture
 
 shelli uses a daemon process to maintain PTY handles across CLI invocations:
 
-- First command auto-starts the daemon if not running
-- Daemon holds all PTY handles in memory
-- CLI commands communicate via Unix socket (`~/.shelli/shelli.sock`)
-- Output is buffered with read position tracking
-
-## For AI Agents
-
-The `exec` command is designed for AI agent workflows:
-
-```bash
-# Simple command execution
-shelli exec session "ls -la" --strip-ansi
-
-# With JSON for parsing
-shelli exec session "echo hello" --json
-# {"input":"echo hello","output":"hello\n","position":123}
-
-# Custom settle time for slow commands
-shelli exec session "slow_command" --settle 2000 --timeout 60
-
-# Interrupt a stuck command
-shelli send session "\x03" --raw
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Claude Code                                  │
+│  Tool call: shelli/exec                                             │
+└──────────────────────────────┬──────────────────────────────────────┘
+                               │ JSON-RPC over stdio (MCP)
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      shelli daemon                                   │
+│                                                                      │
+│  ┌────────────────────┐      ┌────────────────────────────────┐    │
+│  │ MCP Server         │      │ Socket Server                  │    │
+│  │ (--mcp flag)       │      │ (~/.shelli/shelli.sock)        │    │
+│  └─────────┬──────────┘      └─────────────┬──────────────────┘    │
+│            └───────────┬───────────────────┘                        │
+│                        ▼                                            │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │ Session Manager                                              │   │
+│  │ PTY sessions accessible via both MCP and CLI                 │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+                               ▲
+                               │ Unix socket
+┌──────────────────────────────┴──────────────────────────────────────┐
+│                         shelli CLI                                   │
+│  $ shelli list / exec / send / read / kill                          │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
-Typical agent workflow:
+- First CLI command auto-starts the daemon if not running
+- Daemon holds all PTY handles in memory
+- Sessions are shared between MCP and CLI
+- Output is buffered with read position tracking
+
+## Typical Workflow
+
 ```bash
-shelli create session --cmd "python3"
-shelli exec session "x = 42"
-shelli exec session "print(x * 2)" --strip-ansi
+# Create a Python REPL session
+shelli create py --cmd "python3"
+
+# Execute commands
+shelli exec py "x = 42"
+shelli exec py "print(x * 2)" --strip-ansi
 # Output: 84
-shelli kill session
+
+# Clean up
+shelli kill py
 ```
 
 ## Limitations
@@ -224,21 +292,19 @@ shelli kill session
 
 shelli does **not** support full-screen TUI applications like `k9s`, `btop`, `htop`, `vim`, `nano`, etc.
 
-These apps don't produce line-based output - they paint a 2D screen using cursor positioning and ANSI escape sequences. The raw output is screen-drawing instructions, not readable content.
+These apps paint 2D screens using cursor positioning, not line-based output.
 
 **Workarounds:**
-- Use the underlying CLI tools instead:
-  - `k9s` → `kubectl get pods`, `kubectl describe pod`
-  - `btop`/`htop` → `ps aux`, `top -bn1`
-  - `vim` → `sed`, `awk`, or direct file manipulation
-- For apps with no CLI alternative, consider using them outside shelli
+- `k9s` → `kubectl get pods`, `kubectl describe pod`
+- `btop`/`htop` → `ps aux`, `top -bn1`
+- `vim` → `sed`, `awk`, or direct file manipulation
 
-shelli works best with:
+**shelli works best with:**
 - REPLs (Python, Node, Ruby, etc.)
 - Database CLIs (psql, mysql, sqlite3)
-- SSH sessions (for running commands on remote hosts)
+- SSH sessions
 - Any tool that produces line-based text output
 
 ## Version
 
-v0.3.0
+v0.4.0

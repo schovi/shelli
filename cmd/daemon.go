@@ -10,10 +10,12 @@ import (
 	"syscall"
 
 	"github.com/schovi/shelli/internal/daemon"
+	"github.com/schovi/shelli/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
 var daemonMaxOutputFlag string
+var daemonMCPFlag bool
 
 var daemonCmd = &cobra.Command{
 	Use:    "daemon",
@@ -25,9 +27,15 @@ var daemonCmd = &cobra.Command{
 func init() {
 	daemonCmd.Flags().StringVar(&daemonMaxOutputFlag, "max-output", "10MB",
 		"Maximum output buffer size per session (e.g., 10MB, 1GB)")
+	daemonCmd.Flags().BoolVar(&daemonMCPFlag, "mcp", false,
+		"Run as MCP server (JSON-RPC over stdio)")
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
+	if daemonMCPFlag {
+		return runMCPServer()
+	}
+
 	maxSize, err := parseSize(daemonMaxOutputFlag)
 	if err != nil {
 		return fmt.Errorf("invalid --max-output: %w", err)
@@ -49,6 +57,12 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	}()
 
 	return server.Start()
+}
+
+func runMCPServer() error {
+	tools := mcp.NewToolRegistry()
+	server := mcp.NewServer(tools)
+	return server.Run()
 }
 
 func parseSize(s string) (int, error) {

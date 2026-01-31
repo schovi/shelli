@@ -1,0 +1,408 @@
+package mcp
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/schovi/shelli/internal/ansi"
+	"github.com/schovi/shelli/internal/daemon"
+	"github.com/schovi/shelli/internal/escape"
+	"github.com/schovi/shelli/internal/wait"
+)
+
+type ToolRegistry struct {
+	client *daemon.Client
+}
+
+func NewToolRegistry() *ToolRegistry {
+	return &ToolRegistry{
+		client: daemon.NewClient(),
+	}
+}
+
+func (r *ToolRegistry) List() []ToolDef {
+	return []ToolDef{
+		{
+			Name:        "create",
+			Description: "Create a new interactive shell session. Use for REPLs, SSH, database CLIs, or any stateful workflow.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Unique session name (e.g., 'python-repl', 'ssh-prod', 'postgres-db')",
+					},
+					"command": map[string]interface{}{
+						"type":        "string",
+						"description": "Command to run (e.g., 'python3', 'ssh user@host', 'psql -d mydb'). Defaults to user's shell.",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "exec",
+			Description: "Send input to a session and wait for output. Primary command for AI interaction. Sends with newline, waits for output to settle or pattern match.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name",
+					},
+					"input": map[string]interface{}{
+						"type":        "string",
+						"description": "Input to send (newline added automatically)",
+					},
+					"settle_ms": map[string]interface{}{
+						"type":        "integer",
+						"description": "Wait for N ms of silence (default: 500). Mutually exclusive with wait_pattern.",
+					},
+					"wait_pattern": map[string]interface{}{
+						"type":        "string",
+						"description": "Wait for regex pattern match (e.g., '>>>' for Python prompt). Mutually exclusive with settle_ms.",
+					},
+					"timeout_sec": map[string]interface{}{
+						"type":        "integer",
+						"description": "Max wait time in seconds (default: 10)",
+					},
+					"strip_ansi": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Remove ANSI escape codes from output (default: false)",
+					},
+				},
+				"required": []string{"name", "input"},
+			},
+		},
+		{
+			Name:        "send",
+			Description: "Send input to a session without waiting. Use for control characters (Ctrl+C, Ctrl+D), answering prompts without newlines, or fire-and-forget input.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name",
+					},
+					"input": map[string]interface{}{
+						"type":        "string",
+						"description": "Input to send. Use escape sequences for control chars: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\t (Tab).",
+					},
+					"raw": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If true, interprets escape sequences and does NOT add newline. If false (default), adds newline.",
+					},
+				},
+				"required": []string{"name", "input"},
+			},
+		},
+		{
+			Name:        "read",
+			Description: "Read output from a session. Can read new output, all output, or wait for specific patterns.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name",
+					},
+					"all": map[string]interface{}{
+						"type":        "boolean",
+						"description": "If true, read all output from session start. If false (default), read only new output since last read.",
+					},
+					"wait_pattern": map[string]interface{}{
+						"type":        "string",
+						"description": "Wait for regex pattern match before returning",
+					},
+					"settle_ms": map[string]interface{}{
+						"type":        "integer",
+						"description": "Wait for N ms of silence before returning",
+					},
+					"timeout_sec": map[string]interface{}{
+						"type":        "integer",
+						"description": "Max wait time in seconds (default: 10, only used with wait_pattern or settle_ms)",
+					},
+					"strip_ansi": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Remove ANSI escape codes from output",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "list",
+			Description: "List all active sessions with their status",
+			InputSchema: map[string]interface{}{
+				"type":       "object",
+				"properties": map[string]interface{}{},
+			},
+		},
+		{
+			Name:        "kill",
+			Description: "Kill/terminate a session and clean up resources",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name to kill",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+	}
+}
+
+func (r *ToolRegistry) Call(name string, args json.RawMessage) (*CallToolResult, error) {
+	if err := r.client.EnsureDaemon(); err != nil {
+		return nil, fmt.Errorf("daemon: %w", err)
+	}
+
+	switch name {
+	case "create":
+		return r.callCreate(args)
+	case "exec":
+		return r.callExec(args)
+	case "send":
+		return r.callSend(args)
+	case "read":
+		return r.callRead(args)
+	case "list":
+		return r.callList()
+	case "kill":
+		return r.callKill(args)
+	default:
+		return nil, fmt.Errorf("unknown tool: %s", name)
+	}
+}
+
+type CreateArgs struct {
+	Name    string `json:"name"`
+	Command string `json:"command"`
+}
+
+func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error) {
+	var a CreateArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	data, err := r.client.Create(a.Name, a.Command)
+	if err != nil {
+		return nil, err
+	}
+
+	output, _ := json.MarshalIndent(data, "", "  ")
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(output)}},
+	}, nil
+}
+
+type ExecArgs struct {
+	Name        string `json:"name"`
+	Input       string `json:"input"`
+	SettleMs    int    `json:"settle_ms"`
+	WaitPattern string `json:"wait_pattern"`
+	TimeoutSec  int    `json:"timeout_sec"`
+	StripAnsi   bool   `json:"strip_ansi"`
+}
+
+func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
+	var a ExecArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	if a.WaitPattern != "" && a.SettleMs > 0 {
+		return nil, fmt.Errorf("wait_pattern and settle_ms are mutually exclusive")
+	}
+
+	_, startPos, err := r.client.Read(a.Name, "all")
+	if err != nil {
+		return nil, err
+	}
+
+	if err := r.client.Send(a.Name, a.Input, true); err != nil {
+		return nil, err
+	}
+
+	settleMs := a.SettleMs
+	if a.WaitPattern == "" && settleMs == 0 {
+		settleMs = 500
+	}
+
+	timeoutSec := a.TimeoutSec
+	if timeoutSec == 0 {
+		timeoutSec = 10
+	}
+
+	output, pos, err := wait.ForOutput(
+		func() (string, int, error) { return r.client.Read(a.Name, "all") },
+		wait.Config{
+			Pattern:       a.WaitPattern,
+			SettleMs:      settleMs,
+			TimeoutSec:    timeoutSec,
+			StartPosition: startPos,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	if a.StripAnsi {
+		output = ansi.Strip(output)
+	}
+
+	result := map[string]interface{}{
+		"input":    a.Input,
+		"output":   output,
+		"position": pos,
+	}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(data)}},
+	}, nil
+}
+
+type SendArgs struct {
+	Name  string `json:"name"`
+	Input string `json:"input"`
+	Raw   bool   `json:"raw"`
+}
+
+func (r *ToolRegistry) callSend(args json.RawMessage) (*CallToolResult, error) {
+	var a SendArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	input := a.Input
+	addNewline := true
+
+	if a.Raw {
+		var err error
+		input, err = escape.Interpret(input)
+		if err != nil {
+			return nil, fmt.Errorf("interpret escape sequences: %w", err)
+		}
+		addNewline = false
+	}
+
+	if err := r.client.Send(a.Name, input, addNewline); err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: "sent"}},
+	}, nil
+}
+
+type ReadArgs struct {
+	Name        string `json:"name"`
+	All         bool   `json:"all"`
+	WaitPattern string `json:"wait_pattern"`
+	SettleMs    int    `json:"settle_ms"`
+	TimeoutSec  int    `json:"timeout_sec"`
+	StripAnsi   bool   `json:"strip_ansi"`
+}
+
+func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
+	var a ReadArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	mode := "new"
+	if a.All {
+		mode = "all"
+	}
+
+	if a.WaitPattern != "" || a.SettleMs > 0 {
+		_, startPos, err := r.client.Read(a.Name, "all")
+		if err != nil {
+			return nil, err
+		}
+
+		timeoutSec := a.TimeoutSec
+		if timeoutSec == 0 {
+			timeoutSec = 10
+		}
+
+		output, pos, err := wait.ForOutput(
+			func() (string, int, error) { return r.client.Read(a.Name, "all") },
+			wait.Config{
+				Pattern:       a.WaitPattern,
+				SettleMs:      a.SettleMs,
+				TimeoutSec:    timeoutSec,
+				StartPosition: startPos,
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		if a.StripAnsi {
+			output = ansi.Strip(output)
+		}
+
+		result := map[string]interface{}{
+			"output":   output,
+			"position": pos,
+		}
+		data, _ := json.MarshalIndent(result, "", "  ")
+		return &CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: string(data)}},
+		}, nil
+	}
+
+	output, pos, err := r.client.Read(a.Name, mode)
+	if err != nil {
+		return nil, err
+	}
+
+	if a.StripAnsi {
+		output = ansi.Strip(output)
+	}
+
+	result := map[string]interface{}{
+		"output":   output,
+		"position": pos,
+	}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(data)}},
+	}, nil
+}
+
+func (r *ToolRegistry) callList() (*CallToolResult, error) {
+	sessions, err := r.client.List()
+	if err != nil {
+		return nil, err
+	}
+
+	data, _ := json.MarshalIndent(sessions, "", "  ")
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(data)}},
+	}, nil
+}
+
+type KillArgs struct {
+	Name string `json:"name"`
+}
+
+func (r *ToolRegistry) callKill(args json.RawMessage) (*CallToolResult, error) {
+	var a KillArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	if err := r.client.Kill(a.Name); err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("session %q killed", a.Name)}},
+	}, nil
+}
