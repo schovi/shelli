@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -151,7 +152,12 @@ func (s *Server) handleCreate(req Request) Response {
 		}
 	}
 
-	cmd := exec.Command(command)
+	var cmd *exec.Cmd
+	if strings.Contains(command, " ") {
+		cmd = exec.Command("sh", "-c", command)
+	} else {
+		cmd = exec.Command(command)
+	}
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	ptmx, err := pty.Start(cmd)
