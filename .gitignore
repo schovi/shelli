@@ -1,1 +1,18 @@
+# Binary
 shelli
+
+# Test/coverage
+*.test
+*.out
+coverage.html
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Debug
+__debug_bin*
