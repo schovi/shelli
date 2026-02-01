@@ -130,12 +130,14 @@ func (s *Server) Shutdown() {
 }
 
 type Request struct {
-	Action  string `json:"action"`
-	Name    string `json:"name,omitempty"`
-	Command string `json:"command,omitempty"`
-	Input   string `json:"input,omitempty"`
-	Newline bool   `json:"newline,omitempty"`
-	Mode    string `json:"mode,omitempty"`
+	Action    string `json:"action"`
+	Name      string `json:"name,omitempty"`
+	Command   string `json:"command,omitempty"`
+	Input     string `json:"input,omitempty"`
+	Newline   bool   `json:"newline,omitempty"`
+	Mode      string `json:"mode,omitempty"`
+	HeadLines int    `json:"head_lines,omitempty"`
+	TailLines int    `json:"tail_lines,omitempty"`
 }
 
 type Response struct {

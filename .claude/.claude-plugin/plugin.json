@@ -1,6 +1,6 @@
 {
   "name": "shelli-claude",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Persistent interactive shell sessions for AI workflows",
   "author": {
     "name": "David Schovanec"
