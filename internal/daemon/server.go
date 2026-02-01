@@ -331,10 +331,38 @@ func (s *Server) handleRead(req Request) Response {
 		result = string(output)
 	}
 
+	if req.HeadLines > 0 || req.TailLines > 0 {
+		result = limitLines(result, req.HeadLines, req.TailLines)
+	}
+
 	return Response{Success: true, Data: map[string]interface{}{
 		"output":   result,
 		"position": totalLen,
 	}}
+}
+
+func limitLines(output string, head, tail int) string {
+	if output == "" {
+		return ""
+	}
+
+	lines := strings.Split(output, "\n")
+
+	if head > 0 {
+		if head >= len(lines) {
+			return output
+		}
+		return strings.Join(lines[:head], "\n")
+	}
+
+	if tail > 0 {
+		if tail >= len(lines) {
+			return output
+		}
+		return strings.Join(lines[len(lines)-tail:], "\n")
+	}
+
+	return output
 }
 
 func (s *Server) handleSend(req Request) Response {

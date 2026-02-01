@@ -24,6 +24,8 @@ Use --wait or --settle for blocking read (returns new output).`,
 
 var (
 	readAllFlag       bool
+	readHeadFlag      int
+	readTailFlag      int
 	readWaitFlag      string
 	readSettleFlag    int
 	readTimeoutFlag   int
@@ -33,6 +35,8 @@ var (
 
 func init() {
 	readCmd.Flags().BoolVar(&readAllFlag, "all", false, "Read all output from session start")
+	readCmd.Flags().IntVar(&readHeadFlag, "head", 0, "Return first N lines of buffer")
+	readCmd.Flags().IntVar(&readTailFlag, "tail", 0, "Return last N lines of buffer")
 	readCmd.Flags().StringVar(&readWaitFlag, "wait", "", "Wait for regex pattern match")
 	readCmd.Flags().IntVar(&readSettleFlag, "settle", 0, "Wait for N ms of silence")
 	readCmd.Flags().IntVar(&readTimeoutFlag, "timeout", 10, "Max wait time in seconds (for blocking modes)")
@@ -46,6 +50,24 @@ func runRead(cmd *cobra.Command, args []string) error {
 	hasWait := readWaitFlag != ""
 	hasSettle := readSettleFlag > 0
 	blocking := hasWait || hasSettle
+
+	modeCount := 0
+	if readAllFlag {
+		modeCount++
+	}
+	if readHeadFlag > 0 {
+		modeCount++
+	}
+	if readTailFlag > 0 {
+		modeCount++
+	}
+	if modeCount > 1 {
+		return fmt.Errorf("--all, --head, and --tail are mutually exclusive")
+	}
+
+	if readHeadFlag < 0 || readTailFlag < 0 {
+		return fmt.Errorf("--head and --tail require positive integers")
+	}
 
 	if readAllFlag && blocking {
 		return fmt.Errorf("--all cannot be combined with --wait or --settle")
@@ -63,14 +85,17 @@ func runRead(cmd *cobra.Command, args []string) error {
 	var pos int
 	var err error
 
+	headLines := readHeadFlag
+	tailLines := readTailFlag
+
 	if blocking {
-		_, startPos, readErr := client.Read(name, "new")
+		_, startPos, readErr := client.Read(name, "new", 0, 0)
 		if readErr != nil {
 			return readErr
 		}
 
 		output, pos, err = wait.ForOutput(
-			func() (string, int, error) { return client.Read(name, "all") },
+			func() (string, int, error) { return client.Read(name, "all", headLines, tailLines) },
 			wait.Config{
 				Pattern:       readWaitFlag,
 				SettleMs:      readSettleFlag,
@@ -80,10 +105,10 @@ func runRead(cmd *cobra.Command, args []string) error {
 		)
 	} else {
 		mode := "new"
-		if readAllFlag {
+		if readAllFlag || readHeadFlag > 0 || readTailFlag > 0 {
 			mode = "all"
 		}
-		output, pos, err = client.Read(name, mode)
+		output, pos, err = client.Read(name, mode, headLines, tailLines)
 	}
 
 	if err != nil {

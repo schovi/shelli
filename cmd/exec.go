@@ -54,7 +54,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daemon: %w", err)
 	}
 
-	_, startPos, err := client.Read(name, "all")
+	_, startPos, err := client.Read(name, "all", 0, 0)
 	if err != nil {
 		return err
 	}
@@ -75,7 +75,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 	}
 
 	output, pos, err := wait.ForOutput(
-		func() (string, int, error) { return client.Read(name, "all") },
+		func() (string, int, error) { return client.Read(name, "all", 0, 0) },
 		wait.Config{
 			Pattern:       pattern,
 			SettleMs:      settleMs,

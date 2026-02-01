@@ -43,7 +43,7 @@ func (r *ToolRegistry) List() []ToolDef {
 		},
 		{
 			Name:        "exec",
-			Description: "Send input to a session and wait for output. Primary command for AI interaction. Sends with newline, waits for output to settle or pattern match.",
+			Description: "Send input to a session and wait for output. Primary command for AI interaction. Sends with newline, waits for output to settle or pattern match. NOTE: For TUI apps with input buffers (like chat interfaces), use 'send' instead with two-step pattern.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -81,7 +81,7 @@ func (r *ToolRegistry) List() []ToolDef {
 		},
 		{
 			Name:        "send",
-			Description: "Send input to a session without waiting. Use for control characters (Ctrl+C, Ctrl+D), answering prompts without newlines, or fire-and-forget input.",
+			Description: "Send input to a session without waiting. Use for control characters (Ctrl+C, Ctrl+D), answering prompts, or TUI apps that need two-step input (send message, then raw \\r to submit).",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -91,7 +91,7 @@ func (r *ToolRegistry) List() []ToolDef {
 					},
 					"input": map[string]interface{}{
 						"type":        "string",
-						"description": "Input to send. Use escape sequences for control chars: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\t (Tab). Mutually exclusive with input_base64.",
+						"description": "Input to send. Use escape sequences for control chars: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\t (Tab), \\r (submit in TUIs). Mutually exclusive with input_base64.",
 					},
 					"input_base64": map[string]interface{}{
 						"type":        "string",
@@ -99,7 +99,7 @@ func (r *ToolRegistry) List() []ToolDef {
 					},
 					"raw": map[string]interface{}{
 						"type":        "boolean",
-						"description": "If true, interprets escape sequences and does NOT add newline. If false (default), adds newline.",
+						"description": "If true, interprets escape sequences and does NOT add newline. If false (default), adds newline. TIP: For TUI chat apps, first send message (raw=false), then send \\r with raw=true to submit.",
 					},
 				},
 				"required": []string{"name"},
@@ -117,7 +117,15 @@ func (r *ToolRegistry) List() []ToolDef {
 					},
 					"all": map[string]interface{}{
 						"type":        "boolean",
-						"description": "If true, read all output from session start. If false (default), read only new output since last read.",
+						"description": "If true, read all output from session start. If false (default), read only new output since last read. Mutually exclusive with head/tail.",
+					},
+					"head": map[string]interface{}{
+						"type":        "integer",
+						"description": "Return first N lines of buffer. Mutually exclusive with all/tail.",
+					},
+					"tail": map[string]interface{}{
+						"type":        "integer",
+						"description": "Return last N lines of buffer. Mutually exclusive with all/head.",
 					},
 					"wait_pattern": map[string]interface{}{
 						"type":        "string",
@@ -245,7 +253,7 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 		input = string(decoded)
 	}
 
-	_, startPos, err := r.client.Read(a.Name, "all")
+	_, startPos, err := r.client.Read(a.Name, "all", 0, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +273,7 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 	}
 
 	output, pos, err := wait.ForOutput(
-		func() (string, int, error) { return r.client.Read(a.Name, "all") },
+		func() (string, int, error) { return r.client.Read(a.Name, "all", 0, 0) },
 		wait.Config{
 			Pattern:       a.WaitPattern,
 			SettleMs:      settleMs,
@@ -344,6 +352,8 @@ func (r *ToolRegistry) callSend(args json.RawMessage) (*CallToolResult, error) {
 type ReadArgs struct {
 	Name        string `json:"name"`
 	All         bool   `json:"all"`
+	Head        int    `json:"head"`
+	Tail        int    `json:"tail"`
 	WaitPattern string `json:"wait_pattern"`
 	SettleMs    int    `json:"settle_ms"`
 	TimeoutSec  int    `json:"timeout_sec"`
@@ -356,13 +366,31 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		return nil, fmt.Errorf("parse args: %w", err)
 	}
 
-	mode := "new"
+	modeCount := 0
 	if a.All {
+		modeCount++
+	}
+	if a.Head > 0 {
+		modeCount++
+	}
+	if a.Tail > 0 {
+		modeCount++
+	}
+	if modeCount > 1 {
+		return nil, fmt.Errorf("all, head, and tail are mutually exclusive")
+	}
+
+	if a.Head < 0 || a.Tail < 0 {
+		return nil, fmt.Errorf("head and tail require positive integers")
+	}
+
+	mode := "new"
+	if a.All || a.Head > 0 || a.Tail > 0 {
 		mode = "all"
 	}
 
 	if a.WaitPattern != "" || a.SettleMs > 0 {
-		_, startPos, err := r.client.Read(a.Name, "all")
+		_, startPos, err := r.client.Read(a.Name, "all", 0, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -373,7 +401,7 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		}
 
 		output, pos, err := wait.ForOutput(
-			func() (string, int, error) { return r.client.Read(a.Name, "all") },
+			func() (string, int, error) { return r.client.Read(a.Name, "all", a.Head, a.Tail) },
 			wait.Config{
 				Pattern:       a.WaitPattern,
 				SettleMs:      a.SettleMs,
@@ -399,7 +427,7 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		}, nil
 	}
 
-	output, pos, err := r.client.Read(a.Name, mode)
+	output, pos, err := r.client.Read(a.Name, mode, a.Head, a.Tail)
 	if err != nil {
 		return nil, err
 	}

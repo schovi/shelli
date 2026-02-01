@@ -80,11 +80,13 @@ func (c *Client) List() ([]SessionInfo, error) {
 	return sessions, nil
 }
 
-func (c *Client) Read(name, mode string) (string, int, error) {
+func (c *Client) Read(name, mode string, headLines, tailLines int) (string, int, error) {
 	resp, err := c.send(Request{
-		Action: "read",
-		Name:   name,
-		Mode:   mode,
+		Action:    "read",
+		Name:      name,
+		Mode:      mode,
+		HeadLines: headLines,
+		TailLines: tailLines,
 	})
 	if err != nil {
 		return "", 0, err
