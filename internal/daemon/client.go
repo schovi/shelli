@@ -127,6 +127,20 @@ func (c *Client) Send(name, input string, newline bool) error {
 	return nil
 }
 
+func (c *Client) Stop(name string) error {
+	resp, err := c.send(Request{
+		Action: "stop",
+		Name:   name,
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
+}
+
 func (c *Client) Kill(name string) error {
 	resp, err := c.send(Request{
 		Action: "kill",

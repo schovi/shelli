@@ -156,8 +156,22 @@ func (r *ToolRegistry) List() []ToolDef {
 			},
 		},
 		{
+			Name:        "stop",
+			Description: "Stop a running session but keep output accessible. Use this to preserve session output after process ends.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name to stop",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
 			Name:        "kill",
-			Description: "Kill/terminate a session and clean up resources",
+			Description: "Kill/terminate a session and delete all output. Use 'stop' instead if you want to preserve output.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -226,6 +240,8 @@ func (r *ToolRegistry) Call(name string, args json.RawMessage) (*CallToolResult,
 		return r.callRead(args)
 	case "list":
 		return r.callList()
+	case "stop":
+		return r.callStop(args)
 	case "kill":
 		return r.callKill(args)
 	case "search":
@@ -495,6 +511,25 @@ func (r *ToolRegistry) callList() (*CallToolResult, error) {
 	data, _ := json.MarshalIndent(sessions, "", "  ")
 	return &CallToolResult{
 		Content: []ContentBlock{{Type: "text", Text: string(data)}},
+	}, nil
+}
+
+type StopArgs struct {
+	Name string `json:"name"`
+}
+
+func (r *ToolRegistry) callStop(args json.RawMessage) (*CallToolResult, error) {
+	var a StopArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	if err := r.client.Stop(a.Name); err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("session %q stopped", a.Name)}},
 	}, nil
 }
 

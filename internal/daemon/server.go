@@ -18,11 +18,12 @@ import (
 )
 
 type Session struct {
-	Name      string    `json:"name"`
-	PID       int       `json:"pid"`
-	Command   string    `json:"command"`
-	CreatedAt time.Time `json:"created_at"`
-	ReadPos   int       `json:"read_pos"`
+	Name      string       `json:"name"`
+	PID       int          `json:"pid"`
+	Command   string       `json:"command"`
+	State     SessionState `json:"state"`
+	CreatedAt time.Time    `json:"created_at"`
+	StoppedAt *time.Time   `json:"stopped_at,omitempty"`
 }
 
 type SessionInfo struct {
@@ -30,26 +31,44 @@ type SessionInfo struct {
 	PID       int    `json:"pid"`
 	Command   string `json:"command"`
 	CreatedAt string `json:"created_at"`
-	Running   bool   `json:"running"`
+	State     string `json:"state"`
+	StoppedAt string `json:"stopped_at,omitempty"`
 }
 
 type Server struct {
-	mu            sync.Mutex
-	sessions      map[string]*Session
-	ptys          map[string]*os.File
-	cmds          map[string]*exec.Cmd
-	outputs       map[string][]byte
-	doneChans     map[string]chan struct{}
-	dataDir       string
-	listener      net.Listener
-	maxOutputSize int
+	mu        sync.Mutex
+	sessions  map[string]*Session
+	ptys      map[string]*os.File
+	cmds      map[string]*exec.Cmd
+	doneChans map[string]chan struct{}
+	socketDir string
+	storage   OutputStorage
+	listener  net.Listener
+
+	stoppedTTL      time.Duration
+	cleanupStopChan chan struct{}
 }
 
 type ServerOption func(*Server)
 
+func WithStorage(storage OutputStorage) ServerOption {
+	return func(s *Server) {
+		s.storage = storage
+	}
+}
+
+func WithStoppedTTL(ttl time.Duration) ServerOption {
+	return func(s *Server) {
+		s.stoppedTTL = ttl
+	}
+}
+
+// Deprecated: use WithStorage instead
 func WithMaxOutputSize(size int) ServerOption {
 	return func(s *Server) {
-		s.maxOutputSize = size
+		if mem, ok := s.storage.(*MemoryStorage); ok {
+			mem.maxOutputSize = size
+		}
 	}
 }
 
@@ -59,26 +78,62 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		return nil, err
 	}
 
-	dataDir := filepath.Join(homeDir, ".shelli")
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	socketDir := filepath.Join(homeDir, ".shelli")
+	if err := os.MkdirAll(socketDir, 0755); err != nil {
 		return nil, err
 	}
 
 	s := &Server{
-		sessions:      make(map[string]*Session),
-		ptys:          make(map[string]*os.File),
-		cmds:          make(map[string]*exec.Cmd),
-		outputs:       make(map[string][]byte),
-		doneChans:     make(map[string]chan struct{}),
-		dataDir:       dataDir,
-		maxOutputSize: DefaultMaxOutputSize,
+		sessions:        make(map[string]*Session),
+		ptys:            make(map[string]*os.File),
+		cmds:            make(map[string]*exec.Cmd),
+		doneChans:       make(map[string]chan struct{}),
+		socketDir:       socketDir,
+		storage:         NewMemoryStorage(DefaultMaxOutputSize),
+		cleanupStopChan: make(chan struct{}),
 	}
 
 	for _, opt := range opts {
 		opt(s)
 	}
 
+	if err := s.recoverSessions(); err != nil {
+		return nil, fmt.Errorf("recover sessions: %w", err)
+	}
+
 	return s, nil
+}
+
+func (s *Server) recoverSessions() error {
+	sessions, err := s.storage.ListSessions()
+	if err != nil {
+		return err
+	}
+
+	for _, name := range sessions {
+		meta, err := s.storage.LoadMeta(name)
+		if err != nil {
+			continue
+		}
+
+		if meta.State == StateRunning {
+			meta.State = StateStopped
+			now := time.Now()
+			meta.StoppedAt = &now
+			s.storage.SaveMeta(name, meta)
+		}
+
+		s.sessions[name] = &Session{
+			Name:      meta.Name,
+			PID:       meta.PID,
+			Command:   meta.Command,
+			State:     meta.State,
+			CreatedAt: meta.CreatedAt,
+			StoppedAt: meta.StoppedAt,
+		}
+	}
+
+	return nil
 }
 
 func SocketPath() string {
@@ -96,6 +151,10 @@ func (s *Server) Start() error {
 	}
 	s.listener = listener
 
+	if s.stoppedTTL > 0 {
+		go s.runCleanup()
+	}
+
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -108,19 +167,52 @@ func (s *Server) Start() error {
 	}
 }
 
+func (s *Server) runCleanup() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-s.cleanupStopChan:
+			return
+		case <-ticker.C:
+			s.cleanupExpiredSessions()
+		}
+	}
+}
+
+func (s *Server) cleanupExpiredSessions() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	now := time.Now()
+	for name, sess := range s.sessions {
+		if sess.State == StateStopped && sess.StoppedAt != nil {
+			if now.Sub(*sess.StoppedAt) > s.stoppedTTL {
+				s.storage.Delete(name)
+				delete(s.sessions, name)
+			}
+		}
+	}
+}
+
 func (s *Server) Shutdown() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for name := range s.sessions {
-		if done, ok := s.doneChans[name]; ok {
-			close(done)
-		}
-		if ptmx, ok := s.ptys[name]; ok {
-			ptmx.Close()
-		}
-		if cmd, ok := s.cmds[name]; ok {
-			cmd.Process.Kill()
+	close(s.cleanupStopChan)
+
+	for name, sess := range s.sessions {
+		if sess.State == StateRunning {
+			if done, ok := s.doneChans[name]; ok {
+				close(done)
+			}
+			if ptmx, ok := s.ptys[name]; ok {
+				ptmx.Close()
+			}
+			if cmd, ok := s.cmds[name]; ok {
+				cmd.Process.Kill()
+			}
 		}
 	}
 
@@ -148,9 +240,9 @@ type Request struct {
 }
 
 type Response struct {
-	Success  bool        `json:"success"`
-	Error    string      `json:"error,omitempty"`
-	Data     interface{} `json:"data,omitempty"`
+	Success bool        `json:"success"`
+	Error   string      `json:"error,omitempty"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 func (s *Server) handleConn(conn net.Conn) {
@@ -172,6 +264,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		resp = s.handleRead(req)
 	case "send":
 		resp = s.handleSend(req)
+	case "stop":
+		resp = s.handleStop(req)
 	case "kill":
 		resp = s.handleKill(req)
 	case "search":
@@ -218,18 +312,33 @@ func (s *Server) handleCreate(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("start pty: %v", err)}
 	}
 
+	now := time.Now()
+	meta := &SessionMeta{
+		Name:      req.Name,
+		Command:   command,
+		PID:       cmd.Process.Pid,
+		State:     StateRunning,
+		CreatedAt: now,
+		ReadPos:   0,
+	}
+
+	if err := s.storage.Create(req.Name, meta); err != nil {
+		ptmx.Close()
+		cmd.Process.Kill()
+		return Response{Success: false, Error: fmt.Sprintf("create storage: %v", err)}
+	}
+
 	sess := &Session{
 		Name:      req.Name,
 		PID:       cmd.Process.Pid,
 		Command:   command,
-		CreatedAt: time.Now(),
-		ReadPos:   0,
+		State:     StateRunning,
+		CreatedAt: now,
 	}
 
 	s.sessions[req.Name] = sess
 	s.ptys[req.Name] = ptmx
 	s.cmds[req.Name] = cmd
-	s.outputs[req.Name] = []byte{}
 	s.doneChans[req.Name] = make(chan struct{})
 
 	go s.captureOutput(req.Name, ptmx, cmd)
@@ -258,16 +367,7 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 		ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		n, err := ptmx.Read(buf)
 		if n > 0 {
-			s.mu.Lock()
-			s.outputs[name] = append(s.outputs[name], buf[:n]...)
-			if len(s.outputs[name]) > s.maxOutputSize {
-				excess := len(s.outputs[name]) - s.maxOutputSize
-				s.outputs[name] = s.outputs[name][excess:]
-				if sess, ok := s.sessions[name]; ok && sess.ReadPos > 0 {
-					sess.ReadPos = max(0, sess.ReadPos-excess)
-				}
-			}
-			s.mu.Unlock()
+			s.storage.Append(name, buf[:n])
 		}
 		if err != nil && !isTimeout(err) {
 			break
@@ -278,10 +378,23 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	ptmx.Close()
 
 	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	delete(s.ptys, name)
 	delete(s.cmds, name)
 	delete(s.doneChans, name)
-	s.mu.Unlock()
+
+	if sess, ok := s.sessions[name]; ok {
+		sess.State = StateStopped
+		now := time.Now()
+		sess.StoppedAt = &now
+
+		if meta, err := s.storage.LoadMeta(name); err == nil {
+			meta.State = StateStopped
+			meta.StoppedAt = &now
+			s.storage.SaveMeta(name, meta)
+		}
+	}
 }
 
 func isTimeout(err error) bool {
@@ -297,14 +410,17 @@ func (s *Server) handleList() Response {
 
 	result := make([]SessionInfo, 0, len(s.sessions))
 	for _, sess := range s.sessions {
-		running := s.isRunning(sess.PID)
-		result = append(result, SessionInfo{
+		info := SessionInfo{
 			Name:      sess.Name,
 			PID:       sess.PID,
 			Command:   sess.Command,
 			CreatedAt: sess.CreatedAt.Format(time.RFC3339),
-			Running:   running,
-		})
+			State:     string(sess.State),
+		}
+		if sess.StoppedAt != nil {
+			info.StoppedAt = sess.StoppedAt.Format(time.RFC3339)
+		}
+		result = append(result, info)
 	}
 
 	return Response{Success: true, Data: result}
@@ -319,8 +435,17 @@ func (s *Server) handleRead(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 
-	output := s.outputs[req.Name]
-	totalLen := len(output)
+	meta, err := s.storage.LoadMeta(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
+	}
+
+	output, err := s.storage.ReadAll(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+	}
+
+	totalLen := int64(len(output))
 
 	mode := req.Mode
 	if mode == "" {
@@ -330,11 +455,12 @@ func (s *Server) handleRead(req Request) Response {
 	var result string
 	switch mode {
 	case "new":
-		if sess.ReadPos >= totalLen {
+		if meta.ReadPos >= totalLen {
 			result = ""
 		} else {
-			result = string(output[sess.ReadPos:])
-			sess.ReadPos = totalLen
+			result = string(output[meta.ReadPos:])
+			meta.ReadPos = totalLen
+			s.storage.SaveMeta(req.Name, meta)
 		}
 	default:
 		result = string(output)
@@ -347,6 +473,7 @@ func (s *Server) handleRead(req Request) Response {
 	return Response{Success: true, Data: map[string]interface{}{
 		"output":   result,
 		"position": totalLen,
+		"state":    sess.State,
 	}}
 }
 
@@ -376,6 +503,15 @@ func limitLines(output string, head, tail int) string {
 
 func (s *Server) handleSend(req Request) Response {
 	s.mu.Lock()
+	sess, ok := s.sessions[req.Name]
+	if !ok {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+	if sess.State != StateRunning {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q is stopped", req.Name)}
+	}
 	ptmx, ok := s.ptys[req.Name]
 	s.mu.Unlock()
 
@@ -395,13 +531,17 @@ func (s *Server) handleSend(req Request) Response {
 	return Response{Success: true}
 }
 
-func (s *Server) handleKill(req Request) Response {
+func (s *Server) handleStop(req Request) Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	sess, exists := s.sessions[req.Name]
 	if !exists {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+
+	if sess.State == StateStopped {
+		return Response{Success: true, Data: "already stopped"}
 	}
 
 	if done, ok := s.doneChans[req.Name]; ok {
@@ -415,30 +555,60 @@ func (s *Server) handleKill(req Request) Response {
 	}
 
 	if cmd, ok := s.cmds[req.Name]; ok {
-		cmd.Process.Kill()
+		proc := cmd.Process
+		proc.Signal(syscall.SIGTERM)
+		go func() {
+			time.Sleep(KillGracePeriod)
+			proc.Signal(syscall.SIGKILL)
+		}()
 		delete(s.cmds, req.Name)
 	}
 
-	proc, err := os.FindProcess(sess.PID)
-	if err == nil {
-		proc.Signal(syscall.SIGTERM)
-		time.Sleep(KillGracePeriod)
-		proc.Signal(syscall.SIGKILL)
-	}
+	sess.State = StateStopped
+	now := time.Now()
+	sess.StoppedAt = &now
 
-	delete(s.sessions, req.Name)
-	delete(s.outputs, req.Name)
+	if meta, err := s.storage.LoadMeta(req.Name); err == nil {
+		meta.State = StateStopped
+		meta.StoppedAt = &now
+		s.storage.SaveMeta(req.Name, meta)
+	}
 
 	return Response{Success: true}
 }
 
-func (s *Server) isRunning(pid int) bool {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return false
+func (s *Server) handleKill(req Request) Response {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, exists := s.sessions[req.Name]
+	if !exists {
+		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
-	err = proc.Signal(syscall.Signal(0))
-	return err == nil
+
+	if sess.State == StateRunning {
+		if done, ok := s.doneChans[req.Name]; ok {
+			close(done)
+			delete(s.doneChans, req.Name)
+		}
+
+		if ptmx, ok := s.ptys[req.Name]; ok {
+			ptmx.Close()
+			delete(s.ptys, req.Name)
+		}
+
+		if cmd, ok := s.cmds[req.Name]; ok {
+			cmd.Process.Signal(syscall.SIGTERM)
+			time.Sleep(KillGracePeriod)
+			cmd.Process.Signal(syscall.SIGKILL)
+			delete(s.cmds, req.Name)
+		}
+	}
+
+	s.storage.Delete(req.Name)
+	delete(s.sessions, req.Name)
+
+	return Response{Success: true}
 }
 
 func (s *Server) handleSearch(req Request) Response {
@@ -450,7 +620,12 @@ func (s *Server) handleSearch(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 
-	output := string(s.outputs[req.Name])
+	outputBytes, err := s.storage.ReadAll(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+	}
+
+	output := string(outputBytes)
 	if req.StripANSI {
 		output = ansi.Strip(output)
 	}

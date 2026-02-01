@@ -8,14 +8,20 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/schovi/shelli/internal/mcp"
 	"github.com/spf13/cobra"
 )
 
-var daemonMaxOutputFlag string
-var daemonMCPFlag bool
+var (
+	daemonMaxOutputFlag   string
+	daemonMCPFlag         bool
+	daemonDataDirFlag     string
+	daemonMemoryBackend   bool
+	daemonStoppedTTLFlag  string
+)
 
 var daemonCmd = &cobra.Command{
 	Use:    "daemon",
@@ -26,9 +32,15 @@ var daemonCmd = &cobra.Command{
 
 func init() {
 	daemonCmd.Flags().StringVar(&daemonMaxOutputFlag, "max-output", "10MB",
-		"Maximum output buffer size per session (e.g., 10MB, 1GB)")
+		"Maximum output buffer size per session for memory backend (e.g., 10MB, 1GB)")
 	daemonCmd.Flags().BoolVar(&daemonMCPFlag, "mcp", false,
 		"Run as MCP server (JSON-RPC over stdio)")
+	daemonCmd.Flags().StringVar(&daemonDataDirFlag, "data-dir", "/tmp/shelli",
+		"Directory for session output files (file backend only)")
+	daemonCmd.Flags().BoolVar(&daemonMemoryBackend, "memory-backend", false,
+		"Use in-memory storage instead of file-based (no persistence)")
+	daemonCmd.Flags().StringVar(&daemonStoppedTTLFlag, "stopped-ttl", "",
+		"Auto-cleanup stopped sessions after duration (e.g., 5m, 1h, 24h)")
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
@@ -36,12 +48,31 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 		return runMCPServer()
 	}
 
-	maxSize, err := parseSize(daemonMaxOutputFlag)
-	if err != nil {
-		return fmt.Errorf("invalid --max-output: %w", err)
+	var opts []daemon.ServerOption
+
+	if daemonMemoryBackend {
+		maxSize, err := parseSize(daemonMaxOutputFlag)
+		if err != nil {
+			return fmt.Errorf("invalid --max-output: %w", err)
+		}
+		opts = append(opts, daemon.WithStorage(daemon.NewMemoryStorage(maxSize)))
+	} else {
+		fileStorage, err := daemon.NewFileStorage(daemonDataDirFlag)
+		if err != nil {
+			return fmt.Errorf("create file storage: %w", err)
+		}
+		opts = append(opts, daemon.WithStorage(fileStorage))
 	}
 
-	server, err := daemon.NewServer(daemon.WithMaxOutputSize(maxSize))
+	if daemonStoppedTTLFlag != "" {
+		ttl, err := time.ParseDuration(daemonStoppedTTLFlag)
+		if err != nil {
+			return fmt.Errorf("invalid --stopped-ttl: %w", err)
+		}
+		opts = append(opts, daemon.WithStoppedTTL(ttl))
+	}
+
+	server, err := daemon.NewServer(opts...)
 	if err != nil {
 		return err
 	}

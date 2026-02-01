@@ -25,6 +25,7 @@ func init() {
 	rootCmd.AddCommand(readCmd)
 	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(execCmd)
+	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(killCmd)
 	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(versionCmd)

@@ -43,11 +43,7 @@ func runList(cmd *cobra.Command, args []string) error {
 			return nil
 		}
 		for _, s := range sessions {
-			status := "stopped"
-			if s.Running {
-				status = "running"
-			}
-			fmt.Printf("%s\t%s\t%d\t%s\n", s.Name, status, s.PID, s.Command)
+			fmt.Printf("%s\t%s\t%d\t%s\n", s.Name, s.State, s.PID, s.Command)
 		}
 	}
 
