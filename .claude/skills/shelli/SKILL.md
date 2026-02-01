@@ -431,15 +431,65 @@ shelli create session --cmd "command"
 
 ## Limitations
 
-### TUI Applications Not Supported
+### Full-Screen TUI Applications Not Supported
 
-shelli does NOT work with full-screen TUI apps like:
+shelli does NOT work well with full-screen TUI apps that paint 2D screens:
 - Text editors: vim, nano, emacs
 - System monitors: htop, btop, top (interactive mode)
 - File managers: ranger, mc
 - Kubernetes: k9s, lazydocker
 
-These apps paint 2D screens with cursor positioning. Use their CLI alternatives:
+These apps use cursor positioning and screen painting. Use their CLI alternatives:
 - `vim` → `sed`, `awk`, or file operations
 - `htop` → `ps aux`, `top -bn1`
 - `k9s` → `kubectl get pods`, `kubectl describe pod`
+
+### Line-Based TUI Applications CAN Work
+
+Some TUI apps use line-based input/output and work with shelli, but may need special handling:
+
+**Example: OpenClaw TUI**
+
+OpenClaw TUI (`openclaw tui`) is a chat interface for AI agents. It works with shelli but requires a **two-step submit pattern**:
+
+```bash
+# Step 1: Create SSH session and launch TUI
+shelli create openclaw --cmd "ssh user@host"
+shelli read openclaw --settle 3000
+shelli send openclaw "openclaw tui"
+shelli read openclaw --settle 3000
+
+# Step 2: Send message (goes to input field, NOT submitted yet)
+shelli send openclaw "Hello, this is my message"
+
+# Step 3: Submit with raw carriage return (CRITICAL!)
+shelli send openclaw "\r" --raw
+
+# Step 4: Wait for response
+sleep 8  # Allow time for AI to respond
+shelli read openclaw --strip-ansi
+```
+
+**Why two steps?**
+
+1. `shelli send` with a message adds a newline, which goes into the TUI's input buffer
+2. The TUI doesn't auto-submit on newline - it waits for explicit submit
+3. Sending raw `\r` (carriage return) triggers the submit action
+
+**Common mistake:** Using `shelli exec` (which auto-adds newline) does NOT submit in the TUI. The message appears in the input field but never gets sent.
+
+**Pattern for TUIs with input buffers:**
+```bash
+# Type into input field
+shelli send session "your message here"
+# Submit (try these in order until one works)
+shelli send session "\r" --raw       # Carriage return
+shelli send session "\n" --raw       # Newline
+shelli send session "\x1b\r" --raw   # Alt+Enter (ESC + CR)
+```
+
+**Debugging TUI issues:**
+1. Read all output: `shelli read session --all --strip-ansi`
+2. Look for status lines showing "idle" or "connected"
+3. Check if your message appears in input area vs chat history
+4. If stuck, try Ctrl+C: `shelli send session "\x03" --raw`

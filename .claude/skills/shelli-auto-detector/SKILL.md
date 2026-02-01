@@ -133,6 +133,39 @@ shelli read devserver --wait 'ready' --timeout 60
 # Server is ready, session stays open for logs/restarts
 ```
 
+### AI Agent TUIs (OpenClaw, etc.)
+
+**Trigger phrases:**
+- "talk to the AI agent...", "chat with Zephyr..."
+- "openclaw tui", "connect to OpenClaw..."
+- "message the agent on the server..."
+
+**Key insight:** Line-based TUIs like OpenClaw work with shelli but need a **two-step submit pattern**.
+
+**Action:** SSH to host, launch TUI, use two-step send pattern.
+
+```bash
+# User says: "Connect to the VPS and chat with Zephyr"
+shelli create openclaw --cmd "ssh user@vps.example.com"
+shelli read openclaw --settle 3000
+shelli send openclaw "openclaw tui"
+shelli read openclaw --settle 3000
+
+# IMPORTANT: Two-step send pattern for TUI input
+# Step 1: Send message (goes to input buffer)
+shelli send openclaw "Hey Zephyr, checking in"
+# Step 2: Submit with raw carriage return
+shelli send openclaw "\r" --raw
+
+# Wait for AI response
+sleep 8
+shelli read openclaw --strip-ansi
+```
+
+**Why two steps?** The TUI has an input buffer. Regular `send` puts text in the buffer but doesn't submit. Raw `\r` triggers the actual submit action.
+
+**Common mistake:** Using `exec` which auto-adds newline. The message appears in input field but never submits. Always use `send` + raw `\r` for TUI chat apps.
+
 ## Decision Logic
 
 ### Use shelli when:
@@ -164,6 +197,9 @@ shelli read devserver --wait 'ready' --timeout 60
 | `kubectl get pods` | Bash | One-off output |
 | `npm test` | Bash | Exits with status |
 | `npm run dev` + "watch for errors" | shelli | Long-running |
+| `openclaw tui` | shelli | TUI with two-step submit |
+| `vim file.txt` | Bash (not shelli) | Full-screen TUI, use `sed`/`Edit` |
+| `htop` | Bash (not shelli) | Full-screen TUI, use `ps aux` |
 
 ## Proactive Suggestions
 
