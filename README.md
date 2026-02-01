@@ -53,13 +53,15 @@ Add shelli as an MCP server in `~/.claude/settings.json`:
 }
 ```
 
-This exposes 6 MCP tools to Claude:
+This exposes 8 MCP tools to Claude:
 - `shelli/create` - Create a new session
 - `shelli/exec` - Send input and wait for output (primary tool)
 - `shelli/send` - Send input without waiting
 - `shelli/read` - Read session output
-- `shelli/list` - List active sessions
-- `shelli/kill` - Terminate a session
+- `shelli/search` - Search output buffer with regex
+- `shelli/list` - List all sessions
+- `shelli/stop` - Stop session, keep output accessible
+- `shelli/kill` - Stop and delete session
 
 ### Plugin Installation
 
@@ -184,20 +186,124 @@ shelli read pyrepl --wait ">>>"        # wait for Python prompt
 shelli read myshell --settle 300       # wait for 300ms silence
 ```
 
+### search
+
+Search session output buffer for regex patterns.
+
+```bash
+shelli search <name> <pattern> [flags]
+```
+
+Flags:
+- `--before N` - Lines of context before match
+- `--after N` - Lines of context after match
+- `--around N` - Lines of context before and after
+- `--ignore-case` - Case-insensitive search
+- `--strip-ansi` - Strip ANSI codes before searching
+- `--json` - Output as JSON
+
+Examples:
+```bash
+shelli search myshell "error"                    # find errors
+shelli search myshell "ERROR|WARN" --around 3    # with context
+shelli search db "SELECT" --ignore-case          # case-insensitive
+```
+
 ### list
 
-List all sessions.
+List all sessions with their state.
 
 ```bash
 shelli list [--json]
 ```
 
+Output shows: `name`, `state` (running/stopped), `pid`, `command`
+
+### stop
+
+Stop a running session but keep output accessible.
+
+```bash
+shelli stop <name>
+```
+
+The process is terminated (SIGTERM → SIGKILL) but:
+- Output remains readable via `read` and `search`
+- Session stays in `list` with state `stopped`
+- Use `kill` to fully remove
+
 ### kill
 
-Kill a session.
+Stop and delete a session completely.
 
 ```bash
 shelli kill <name>
+```
+
+This is a compound operation:
+- If running: stops the process first
+- Deletes all session data (output and metadata)
+
+## Session Lifecycle
+
+Sessions have explicit states with clear transitions:
+
+```
+     create
+        ↓
+    [running] ←→ exec/send/read/search
+        ↓
+      stop (or natural exit)
+        ↓
+    [stopped] ←→ read/search only
+        ↓
+      kill
+        ↓
+    (removed)
+```
+
+- **running**: Process is active, all commands work
+- **stopped**: Process terminated, output preserved for reading
+- Stopped sessions reject `exec` and `send` with an error
+
+## Storage
+
+By default, shelli stores session output in files at `/tmp/shelli/`:
+
+```
+/tmp/shelli/
+├── mysession.out    # raw PTY output
+└── mysession.meta   # JSON metadata (state, pid, timestamps)
+```
+
+This means:
+- **Output survives daemon restart** - stopped sessions are recovered
+- **Unlimited output size** - no buffer limits
+- **Persistent read position** - continues where you left off
+
+### Daemon Flags
+
+```bash
+shelli daemon [flags]
+```
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--data-dir` | `/tmp/shelli` | Directory for session files |
+| `--memory-backend` | `false` | Use in-memory storage (no persistence) |
+| `--stopped-ttl` | (disabled) | Auto-delete stopped sessions after duration |
+| `--max-output` | `10MB` | Buffer size limit (memory backend only) |
+
+Examples:
+```bash
+# Use custom storage location
+shelli daemon --data-dir ~/.shelli/sessions
+
+# Memory-only mode (v0.3 behavior)
+shelli daemon --memory-backend --max-output 50MB
+
+# Auto-cleanup stopped sessions after 1 hour
+shelli daemon --stopped-ttl 1h
 ```
 
 ## Escape Sequences
@@ -271,14 +377,15 @@ shelli uses a daemon process to maintain PTY handles across CLI invocations:
                                │ Unix socket
 ┌──────────────────────────────┴──────────────────────────────────────┐
 │                         shelli CLI                                   │
-│  $ shelli list / exec / send / read / kill                          │
+│  $ shelli create / exec / send / read / search / list / stop / kill │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
 - First CLI command auto-starts the daemon if not running
-- Daemon holds all PTY handles in memory
+- Daemon manages PTY handles and session state
 - Sessions are shared between MCP and CLI
-- Output is buffered with read position tracking
+- Output stored in files (default) or memory, with read position tracking
+- Stopped sessions recovered on daemon restart (file backend only)
 
 ## Typical Workflow
 
@@ -291,7 +398,11 @@ shelli exec py "x = 42"
 shelli exec py "print(x * 2)" --strip-ansi
 # Output: 84
 
-# Clean up
+# Stop session but keep output
+shelli stop py
+shelli read py --all        # still works!
+
+# Fully remove when done
 shelli kill py
 ```
 
@@ -325,4 +436,4 @@ make security   # Run gosec + govulncheck
 
 ## Version
 
-v0.1.0
+v0.4.0
