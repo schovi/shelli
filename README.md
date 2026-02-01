@@ -440,6 +440,13 @@ make lint       # Run golangci-lint
 make security   # Run gosec + govulncheck
 ```
 
-## Version
+## Contributing
 
-v0.4.0
+Contributions welcome. Please:
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/my-feature`)
+3. Run tests and linting before committing (`make test && make lint`)
+4. Open a pull request against `main`
+
+For bugs or feature requests, open an issue first to discuss.
