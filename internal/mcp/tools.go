@@ -169,6 +169,44 @@ func (r *ToolRegistry) List() []ToolDef {
 				"required": []string{"name"},
 			},
 		},
+		{
+			Name:        "search",
+			Description: "Search session output buffer for regex patterns with context lines",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name",
+					},
+					"pattern": map[string]interface{}{
+						"type":        "string",
+						"description": "Regex pattern to search for",
+					},
+					"before": map[string]interface{}{
+						"type":        "integer",
+						"description": "Lines of context before each match (default: 0)",
+					},
+					"after": map[string]interface{}{
+						"type":        "integer",
+						"description": "Lines of context after each match (default: 0)",
+					},
+					"around": map[string]interface{}{
+						"type":        "integer",
+						"description": "Lines of context before AND after (shorthand for before+after). Mutually exclusive with before/after.",
+					},
+					"ignore_case": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Case-insensitive search (default: false)",
+					},
+					"strip_ansi": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Strip ANSI escape codes before searching (default: false)",
+					},
+				},
+				"required": []string{"name", "pattern"},
+			},
+		},
 	}
 }
 
@@ -190,6 +228,8 @@ func (r *ToolRegistry) Call(name string, args json.RawMessage) (*CallToolResult,
 		return r.callList()
 	case "kill":
 		return r.callKill(args)
+	case "search":
+		return r.callSearch(args)
 	default:
 		return nil, fmt.Errorf("unknown tool: %s", name)
 	}
@@ -474,5 +514,50 @@ func (r *ToolRegistry) callKill(args json.RawMessage) (*CallToolResult, error) {
 
 	return &CallToolResult{
 		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("session %q killed", a.Name)}},
+	}, nil
+}
+
+type SearchArgs struct {
+	Name       string `json:"name"`
+	Pattern    string `json:"pattern"`
+	Before     int    `json:"before"`
+	After      int    `json:"after"`
+	Around     int    `json:"around"`
+	IgnoreCase bool   `json:"ignore_case"`
+	StripAnsi  bool   `json:"strip_ansi"`
+}
+
+func (r *ToolRegistry) callSearch(args json.RawMessage) (*CallToolResult, error) {
+	var a SearchArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	if a.Around > 0 && (a.Before > 0 || a.After > 0) {
+		return nil, fmt.Errorf("around is mutually exclusive with before/after")
+	}
+
+	before := a.Before
+	after := a.After
+	if a.Around > 0 {
+		before = a.Around
+		after = a.Around
+	}
+
+	resp, err := r.client.Search(daemon.SearchRequest{
+		Name:       a.Name,
+		Pattern:    a.Pattern,
+		Before:     before,
+		After:      after,
+		IgnoreCase: a.IgnoreCase,
+		StripANSI:  a.StripAnsi,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	data, _ := json.MarshalIndent(resp, "", "  ")
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(data)}},
 	}, nil
 }

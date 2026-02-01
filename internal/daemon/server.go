@@ -7,12 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/schovi/shelli/internal/ansi"
 )
 
 type Session struct {
@@ -130,14 +132,19 @@ func (s *Server) Shutdown() {
 }
 
 type Request struct {
-	Action    string `json:"action"`
-	Name      string `json:"name,omitempty"`
-	Command   string `json:"command,omitempty"`
-	Input     string `json:"input,omitempty"`
-	Newline   bool   `json:"newline,omitempty"`
-	Mode      string `json:"mode,omitempty"`
-	HeadLines int    `json:"head_lines,omitempty"`
-	TailLines int    `json:"tail_lines,omitempty"`
+	Action     string `json:"action"`
+	Name       string `json:"name,omitempty"`
+	Command    string `json:"command,omitempty"`
+	Input      string `json:"input,omitempty"`
+	Newline    bool   `json:"newline,omitempty"`
+	Mode       string `json:"mode,omitempty"`
+	HeadLines  int    `json:"head_lines,omitempty"`
+	TailLines  int    `json:"tail_lines,omitempty"`
+	Pattern    string `json:"pattern,omitempty"`
+	Before     int    `json:"before,omitempty"`
+	After      int    `json:"after,omitempty"`
+	IgnoreCase bool   `json:"ignore_case,omitempty"`
+	StripANSI  bool   `json:"strip_ansi,omitempty"`
 }
 
 type Response struct {
@@ -167,6 +174,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		resp = s.handleSend(req)
 	case "kill":
 		resp = s.handleKill(req)
+	case "search":
+		resp = s.handleSearch(req)
 	case "ping":
 		resp = Response{Success: true, Data: "pong"}
 	default:
@@ -430,4 +439,61 @@ func (s *Server) isRunning(pid int) bool {
 	}
 	err = proc.Signal(syscall.Signal(0))
 	return err == nil
+}
+
+func (s *Server) handleSearch(req Request) Response {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	_, exists := s.sessions[req.Name]
+	if !exists {
+		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+
+	output := string(s.outputs[req.Name])
+	if req.StripANSI {
+		output = ansi.Strip(output)
+	}
+
+	patternStr := req.Pattern
+	if req.IgnoreCase {
+		patternStr = "(?i)" + patternStr
+	}
+
+	re, err := regexp.Compile(patternStr)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("invalid pattern: %v", err)}
+	}
+
+	lines := strings.Split(output, "\n")
+	var matches []map[string]interface{}
+
+	for i, line := range lines {
+		if re.MatchString(line) {
+			beforeStart := max(0, i-req.Before)
+			afterEnd := min(len(lines), i+req.After+1)
+
+			beforeLines := make([]string, 0, i-beforeStart)
+			for j := beforeStart; j < i; j++ {
+				beforeLines = append(beforeLines, lines[j])
+			}
+
+			afterLines := make([]string, 0, afterEnd-i-1)
+			for j := i + 1; j < afterEnd; j++ {
+				afterLines = append(afterLines, lines[j])
+			}
+
+			matches = append(matches, map[string]interface{}{
+				"line_number": i + 1,
+				"line":        line,
+				"before":      beforeLines,
+				"after":       afterLines,
+			})
+		}
+	}
+
+	return Response{Success: true, Data: map[string]interface{}{
+		"matches":       matches,
+		"total_matches": len(matches),
+	}}
 }

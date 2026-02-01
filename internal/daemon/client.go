@@ -141,6 +141,52 @@ func (c *Client) Kill(name string) error {
 	return nil
 }
 
+type SearchRequest struct {
+	Name       string
+	Pattern    string
+	Before     int
+	After      int
+	IgnoreCase bool
+	StripANSI  bool
+}
+
+type SearchMatch struct {
+	LineNumber int      `json:"line_number"`
+	Line       string   `json:"line"`
+	Before     []string `json:"before"`
+	After      []string `json:"after"`
+}
+
+type SearchResponse struct {
+	Matches      []SearchMatch `json:"matches"`
+	TotalMatches int           `json:"total_matches"`
+}
+
+func (c *Client) Search(req SearchRequest) (*SearchResponse, error) {
+	resp, err := c.send(Request{
+		Action:     "search",
+		Name:       req.Name,
+		Pattern:    req.Pattern,
+		Before:     req.Before,
+		After:      req.After,
+		IgnoreCase: req.IgnoreCase,
+		StripANSI:  req.StripANSI,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+
+	data, _ := json.Marshal(resp.Data)
+	var result SearchResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	return &result, nil
+}
+
 func (c *Client) send(req Request) (*Response, error) {
 	conn, err := net.Dial("unix", SocketPath())
 	if err != nil {

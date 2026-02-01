@@ -26,5 +26,6 @@ func init() {
 	rootCmd.AddCommand(sendCmd)
 	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(killCmd)
+	rootCmd.AddCommand(searchCmd)
 	rootCmd.AddCommand(versionCmd)
 }
