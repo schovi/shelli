@@ -51,6 +51,10 @@ func (c *Client) Ping() bool {
 }
 
 func (c *Client) Create(name, command string) (map[string]interface{}, error) {
+	if err := ValidateSessionName(name); err != nil {
+		return nil, err
+	}
+
 	resp, err := c.send(Request{
 		Action:  "create",
 		Name:    name,
@@ -74,9 +78,14 @@ func (c *Client) List() ([]SessionInfo, error) {
 		return nil, fmt.Errorf("%s", resp.Error)
 	}
 
-	data, _ := json.Marshal(resp.Data)
+	data, err := json.Marshal(resp.Data)
+	if err != nil {
+		return nil, fmt.Errorf("marshal response: %w", err)
+	}
 	var sessions []SessionInfo
-	json.Unmarshal(data, &sessions)
+	if err := json.Unmarshal(data, &sessions); err != nil {
+		return nil, fmt.Errorf("unmarshal sessions: %w", err)
+	}
 	return sessions, nil
 }
 

@@ -140,3 +140,27 @@ func TestForOutput_DefaultPollInterval(t *testing.T) {
 		t.Errorf("expected default poll interval 50ms, got %v", DefaultPollInterval)
 	}
 }
+
+func TestForOutput_StartPositionExceedsOutput_NoPanic(t *testing.T) {
+	readFn := func() (string, int, error) {
+		return "hello", 100, nil
+	}
+
+	cfg := Config{
+		SettleMs:      50,
+		TimeoutSec:    1,
+		StartPosition: 50,
+		PollInterval:  10 * time.Millisecond,
+	}
+
+	got, pos, err := ForOutput(readFn, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error (should not panic): %v", err)
+	}
+	if got != "" {
+		t.Errorf("expected empty output when StartPosition exceeds length, got %q", got)
+	}
+	if pos != 100 {
+		t.Errorf("expected position 100, got %d", pos)
+	}
+}

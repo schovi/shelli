@@ -284,6 +284,10 @@ func (s *Server) sendResponse(conn net.Conn, resp Response) {
 }
 
 func (s *Server) handleCreate(req Request) Response {
+	if err := ValidateSessionName(req.Name); err != nil {
+		return Response{Success: false, Error: err.Error()}
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -428,19 +432,21 @@ func (s *Server) handleList() Response {
 
 func (s *Server) handleRead(req Request) Response {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	sess, exists := s.sessions[req.Name]
 	if !exists {
+		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
+	sessState := sess.State
+	storage := s.storage
+	s.mu.Unlock()
 
-	meta, err := s.storage.LoadMeta(req.Name)
+	meta, err := storage.LoadMeta(req.Name)
 	if err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
 	}
 
-	output, err := s.storage.ReadAll(req.Name)
+	output, err := storage.ReadAll(req.Name)
 	if err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
 	}
@@ -460,7 +466,7 @@ func (s *Server) handleRead(req Request) Response {
 		} else {
 			result = string(output[meta.ReadPos:])
 			meta.ReadPos = totalLen
-			s.storage.SaveMeta(req.Name, meta)
+			storage.SaveMeta(req.Name, meta)
 		}
 	default:
 		result = string(output)
@@ -473,7 +479,7 @@ func (s *Server) handleRead(req Request) Response {
 	return Response{Success: true, Data: map[string]interface{}{
 		"output":   result,
 		"position": totalLen,
-		"state":    sess.State,
+		"state":    sessState,
 	}}
 }
 
@@ -613,14 +619,15 @@ func (s *Server) handleKill(req Request) Response {
 
 func (s *Server) handleSearch(req Request) Response {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	_, exists := s.sessions[req.Name]
 	if !exists {
+		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
+	storage := s.storage
+	s.mu.Unlock()
 
-	outputBytes, err := s.storage.ReadAll(req.Name)
+	outputBytes, err := storage.ReadAll(req.Name)
 	if err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
 	}

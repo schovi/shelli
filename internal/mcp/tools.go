@@ -31,7 +31,8 @@ func (r *ToolRegistry) List() []ToolDef {
 				"properties": map[string]interface{}{
 					"name": map[string]interface{}{
 						"type":        "string",
-						"description": "Unique session name (e.g., 'python-repl', 'ssh-prod', 'postgres-db')",
+						"description": "Unique session name (alphanumeric start, may contain letters, numbers, dots, dashes, underscores; max 64 chars)",
+						"pattern":     "^[A-Za-z0-9][A-Za-z0-9._-]*$",
 					},
 					"command": map[string]interface{}{
 						"type":        "string",

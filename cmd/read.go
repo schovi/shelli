@@ -89,7 +89,7 @@ func runRead(cmd *cobra.Command, args []string) error {
 	tailLines := readTailFlag
 
 	if blocking {
-		_, startPos, readErr := client.Read(name, "new", 0, 0)
+		_, startPos, readErr := client.Read(name, "all", 0, 0)
 		if readErr != nil {
 			return readErr
 		}
@@ -103,6 +103,9 @@ func runRead(cmd *cobra.Command, args []string) error {
 				StartPosition: startPos,
 			},
 		)
+		if err == nil {
+			client.Read(name, "new", 0, 0)
+		}
 	} else {
 		mode := "new"
 		if readAllFlag || readHeadFlag > 0 || readTailFlag > 0 {

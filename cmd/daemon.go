@@ -92,7 +92,7 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 
 func runMCPServer() error {
 	tools := mcp.NewToolRegistry()
-	server := mcp.NewServer(tools)
+	server := mcp.NewServer(tools, version)
 	return server.Run()
 }
 

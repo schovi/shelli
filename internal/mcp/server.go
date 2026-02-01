@@ -12,17 +12,19 @@ import (
 const ProtocolVersion = "2024-11-05"
 
 type Server struct {
-	tools    *ToolRegistry
-	reader   *bufio.Reader
-	writer   io.Writer
-	mu       sync.Mutex
+	tools   *ToolRegistry
+	version string
+	reader  *bufio.Reader
+	writer  io.Writer
+	mu      sync.Mutex
 }
 
-func NewServer(tools *ToolRegistry) *Server {
+func NewServer(tools *ToolRegistry, version string) *Server {
 	return &Server{
-		tools:  tools,
-		reader: bufio.NewReader(os.Stdin),
-		writer: os.Stdout,
+		tools:   tools,
+		version: version,
+		reader:  bufio.NewReader(os.Stdin),
+		writer:  os.Stdout,
 	}
 }
 
@@ -134,7 +136,7 @@ func (s *Server) handleInitialize(req *Request) {
 		},
 	}
 	result.ServerInfo.Name = "shelli"
-	result.ServerInfo.Version = "0.2.0"
+	result.ServerInfo.Version = s.version
 
 	s.sendResult(req.ID, result)
 }

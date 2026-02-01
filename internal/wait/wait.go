@@ -53,7 +53,11 @@ func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
 
 		newOutput := ""
 		if pos > cfg.StartPosition {
-			newOutput = output[cfg.StartPosition:]
+			startIdx := cfg.StartPosition
+			if startIdx > len(output) {
+				startIdx = len(output)
+			}
+			newOutput = output[startIdx:]
 		}
 
 		if re != nil && re.MatchString(newOutput) {
@@ -70,7 +74,11 @@ func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
 	output, pos, _ := readFn()
 	newOutput := ""
 	if pos > cfg.StartPosition {
-		newOutput = output[cfg.StartPosition:]
+		startIdx := cfg.StartPosition
+		if startIdx > len(output) {
+			startIdx = len(output)
+		}
+		newOutput = output[startIdx:]
 	}
 
 	if re != nil {
