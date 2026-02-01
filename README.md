@@ -12,6 +12,12 @@
   Enables persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.) that survive across CLI invocations.
 </p>
 
+<p align="center">
+  <a href="https://github.com/schovi/shelli/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/schovi/shelli/ci.yml?branch=main&style=flat-square" alt="Build"></a>
+  <a href="https://github.com/schovi/shelli/releases"><img src="https://img.shields.io/github/v/release/schovi/shelli?style=flat-square" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
+</p>
+
 ## Installation
 
 ### Homebrew (macOS/Linux)
