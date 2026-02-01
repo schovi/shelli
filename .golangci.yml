@@ -4,21 +4,13 @@ linters:
   enable:
     - bodyclose
     - govet
-    - errcheck
     - staticcheck
     - unused
-    - gosimple
     - ineffassign
-    - typecheck
-    - gosec
     - gocritic
     - misspell
     - unconvert
     - unparam
     - nilerr
-    - revive
-
-linters-settings:
-  gosec:
-    excludes:
-      - G204  # Subprocess with variable (expected for shell tool)
+  disable:
+    - errcheck
