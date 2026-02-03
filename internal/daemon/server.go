@@ -822,6 +822,14 @@ func (s *Server) handleResize(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("resize: %v", err)}
 	}
 
+	// Send SIGWINCH explicitly to ensure the process receives it
+	// (pty.Setsize should trigger this via kernel, but explicit signal is more reliable)
+	s.mu.Lock()
+	if cmd, ok := s.cmds[req.Name]; ok && cmd.Process != nil {
+		cmd.Process.Signal(syscall.SIGWINCH)
+	}
+	s.mu.Unlock()
+
 	meta.Cols = cols
 	meta.Rows = rows
 	if err := storage.SaveMeta(req.Name, meta); err != nil {

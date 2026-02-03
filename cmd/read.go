@@ -1,8 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/schovi/shelli/internal/ansi"
 	"github.com/schovi/shelli/internal/daemon"
@@ -31,6 +36,8 @@ var (
 	readTimeoutFlag   int
 	readStripAnsiFlag bool
 	readJsonFlag      bool
+	readFollowFlag    bool
+	readFollowMsFlag  int
 )
 
 func init() {
@@ -42,6 +49,8 @@ func init() {
 	readCmd.Flags().IntVar(&readTimeoutFlag, "timeout", 10, "Max wait time in seconds (for blocking modes)")
 	readCmd.Flags().BoolVar(&readStripAnsiFlag, "strip-ansi", false, "Strip ANSI escape codes")
 	readCmd.Flags().BoolVar(&readJsonFlag, "json", false, "Output as JSON")
+	readCmd.Flags().BoolVarP(&readFollowFlag, "follow", "f", false, "Follow output continuously (like tail -f)")
+	readCmd.Flags().IntVar(&readFollowMsFlag, "follow-ms", 100, "Poll interval for --follow in milliseconds")
 }
 
 func runRead(cmd *cobra.Command, args []string) error {
@@ -74,6 +83,13 @@ func runRead(cmd *cobra.Command, args []string) error {
 	}
 	if hasWait && hasSettle {
 		return fmt.Errorf("--wait and --settle are mutually exclusive")
+	}
+
+	if readFollowFlag {
+		if readAllFlag || readHeadFlag > 0 || readTailFlag > 0 || blocking || readJsonFlag {
+			return fmt.Errorf("--follow cannot be combined with --all, --head, --tail, --wait, --settle, or --json")
+		}
+		return runReadFollow(name)
 	}
 
 	client := daemon.NewClient()
@@ -137,4 +153,43 @@ func runRead(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+func runReadFollow(name string) error {
+	client := daemon.NewClient()
+	if err := client.EnsureDaemon(); err != nil {
+		return fmt.Errorf("daemon: %w", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigCh
+		cancel()
+	}()
+
+	pollInterval := time.Duration(readFollowMsFlag) * time.Millisecond
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+			output, _, err := client.Read(name, daemon.ReadModeNew, 0, 0)
+			if err != nil {
+				return err
+			}
+			if output != "" {
+				if readStripAnsiFlag {
+					output = ansi.Strip(output)
+				}
+				fmt.Print(output)
+			}
+		}
+	}
 }
