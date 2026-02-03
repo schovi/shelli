@@ -5,7 +5,7 @@
 <h1 align="center">shelli</h1>
 
 <p align="center">
-  <strong>Shell Interactive</strong> — Persistent shell sessions for AI agents
+  <strong>Shell Interface</strong> — Persistent shell sessions for AI agents
 </p>
 
 <p align="center">
