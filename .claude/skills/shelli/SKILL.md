@@ -54,13 +54,17 @@ shelli create server --cmd "ssh user@host"   # SSH session
 shelli create redis --cmd "redis-cli"        # Redis CLI
 ```
 
-### exec - Send input and wait for result (primary command for AI)
+### exec - Send command and wait for result (primary command for AI)
 
 ```bash
 shelli exec <name> <input> [flags]
 ```
 
-Sends input with newline, waits for output to settle or pattern match.
+Sends a command as literal text with newline appended, waits for output to settle or pattern match.
+
+Input is sent exactly as provided - escape sequences like `\n` are NOT interpreted by shelli. They're passed to the shell as-is (the shell may interpret them, e.g., `echo -e`).
+
+For precise control over escape sequences or TUI apps, use `send` instead.
 
 Flags:
 - `--settle N`: Wait for N ms of silence (default: 500)
@@ -86,6 +90,9 @@ shelli exec session "command" --strip-ansi --json
 
 # Long-running with timeout
 shelli exec session "slow_command" --settle 5000 --timeout 120
+
+# Escape sequences passed to shell (shell interprets them)
+shelli exec myshell "echo -e 'hello\nworld'"
 ```
 
 ### send - Send raw input without waiting

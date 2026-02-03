@@ -44,7 +44,7 @@ func (r *ToolRegistry) List() []ToolDef {
 		},
 		{
 			Name:        "exec",
-			Description: "Send input to a session and wait for output. Primary command for AI interaction. Sends with newline, waits for output to settle or pattern match. NOTE: For TUI apps with input buffers (like chat interfaces), use 'send' instead with two-step pattern.",
+			Description: "Send a command to a session and wait for output. Adds newline automatically, waits for output to settle or pattern match. Input is sent as literal text (no escape interpretation). For TUI apps or precise control, use 'send' with separate arguments: send session \"hello\" \"\\r\"",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -54,11 +54,7 @@ func (r *ToolRegistry) List() []ToolDef {
 					},
 					"input": map[string]interface{}{
 						"type":        "string",
-						"description": "Input to send (newline added automatically). Mutually exclusive with input_base64.",
-					},
-					"input_base64": map[string]interface{}{
-						"type":        "string",
-						"description": "Input as base64 (fallback when JSON escaping is too complex). Mutually exclusive with input.",
+						"description": "Command to send (newline added automatically, sent as literal text)",
 					},
 					"settle_ms": map[string]interface{}{
 						"type":        "integer",
@@ -77,7 +73,7 @@ func (r *ToolRegistry) List() []ToolDef {
 						"description": "Remove ANSI escape codes from output (default: false)",
 					},
 				},
-				"required": []string{"name"},
+				"required": []string{"name", "input"},
 			},
 		},
 		{
@@ -278,7 +274,6 @@ func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error)
 type ExecArgs struct {
 	Name        string `json:"name"`
 	Input       string `json:"input"`
-	InputBase64 string `json:"input_base64"`
 	SettleMs    int    `json:"settle_ms"`
 	WaitPattern string `json:"wait_pattern"`
 	TimeoutSec  int    `json:"timeout_sec"`
@@ -295,21 +290,11 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 		return nil, fmt.Errorf("wait_pattern and settle_ms are mutually exclusive")
 	}
 
-	if a.Input == "" && a.InputBase64 == "" {
-		return nil, fmt.Errorf("input or input_base64 is required")
+	if a.Input == "" {
+		return nil, fmt.Errorf("input is required")
 	}
 
 	input := a.Input
-	if a.InputBase64 != "" {
-		if a.Input != "" {
-			return nil, fmt.Errorf("input and input_base64 are mutually exclusive")
-		}
-		decoded, err := base64.StdEncoding.DecodeString(a.InputBase64)
-		if err != nil {
-			return nil, fmt.Errorf("decode input_base64: %w", err)
-		}
-		input = string(decoded)
-	}
 
 	_, startPos, err := r.client.Read(a.Name, "all", 0, 0)
 	if err != nil {

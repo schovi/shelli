@@ -123,11 +123,15 @@ shelli create server --cmd "ssh user@host"   # SSH session
 
 ### exec
 
-Send input and wait for result. The primary command for AI agents.
+Send a command and wait for result. The primary command for AI agents.
 
 ```bash
 shelli exec <name> <input> [flags]
 ```
+
+Input is sent as literal text with a newline appended. Escape sequences like `\n` are NOT interpreted by shelli - they're passed to the shell as-is (the shell may interpret them, e.g., `echo -e`).
+
+For precise control over escape sequences or TUI apps, use `send` instead.
 
 Flags:
 - `--settle N` - Wait for N ms of silence (default: 500)
@@ -142,6 +146,7 @@ shelli exec pyrepl "print('hello')"                # wait for output to settle
 shelli exec pyrepl "print('hello')" --settle 1000  # longer settle
 shelli exec myshell "ls" --wait '\$'               # wait for shell prompt
 shelli exec db "SELECT 1;" --strip-ansi --json     # clean JSON output
+shelli exec myshell "echo -e 'hello\nworld'"       # \n passed to shell's echo
 ```
 
 ### send

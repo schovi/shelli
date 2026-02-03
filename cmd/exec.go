@@ -13,10 +13,15 @@ import (
 
 var execCmd = &cobra.Command{
 	Use:   "exec <name> <input>",
-	Short: "Send input and wait for result",
-	Long: `Send input to a session and wait for the result.
+	Short: "Send command and wait for result",
+	Long: `Send a command to a session and wait for the result.
 
-Sends the input with a newline, then waits for output to settle.
+Sends the input as literal text with a newline appended, then waits for output
+to settle. Escape sequences like \n are NOT interpreted - they're passed to
+the shell as-is (the shell may interpret them, e.g., echo -e).
+
+For precise control over escape sequences, use 'send' instead.
+
 By default waits for 500ms of silence. Use --wait for pattern matching.`,
 	Args: cobra.MinimumNArgs(2),
 	RunE: runExec,
