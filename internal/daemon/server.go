@@ -446,30 +446,39 @@ func (s *Server) handleRead(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
 	}
 
-	output, err := storage.ReadAll(req.Name)
-	if err != nil {
-		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
-	}
-
-	totalLen := int64(len(output))
-
 	mode := req.Mode
 	if mode == "" {
-		mode = "new"
+		mode = ReadModeNew
 	}
 
 	var result string
+	var totalLen int64
+
 	switch mode {
-	case "new":
+	case ReadModeNew:
+		totalLen, err = storage.Size(req.Name)
+		if err != nil {
+			return Response{Success: false, Error: fmt.Sprintf("get size: %v", err)}
+		}
+
 		if meta.ReadPos >= totalLen {
 			result = ""
 		} else {
-			result = string(output[meta.ReadPos:])
+			output, err := storage.ReadFrom(req.Name, meta.ReadPos)
+			if err != nil {
+				return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+			}
+			result = string(output)
 			meta.ReadPos = totalLen
 			storage.SaveMeta(req.Name, meta)
 		}
 	default:
+		output, err := storage.ReadAll(req.Name)
+		if err != nil {
+			return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+		}
 		result = string(output)
+		totalLen = int64(len(output))
 	}
 
 	if req.HeadLines > 0 || req.TailLines > 0 {

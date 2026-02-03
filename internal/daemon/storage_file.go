@@ -3,6 +3,7 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,19 +65,15 @@ func (s *FileStorage) ReadFrom(session string, offset int64) ([]byte, error) {
 	}
 	defer f.Close()
 
-	if _, err := f.Seek(offset, 0); err != nil {
+	if _, err := f.Seek(offset, io.SeekStart); err != nil {
 		return nil, fmt.Errorf("seek: %w", err)
 	}
 
-	data, err := os.ReadFile(s.outputPath(session))
+	data, err := io.ReadAll(f)
 	if err != nil {
 		return nil, fmt.Errorf("read output: %w", err)
 	}
-
-	if offset >= int64(len(data)) {
-		return []byte{}, nil
-	}
-	return data[offset:], nil
+	return data, nil
 }
 
 func (s *FileStorage) ReadAll(session string) ([]byte, error) {

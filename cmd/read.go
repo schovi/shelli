@@ -107,9 +107,9 @@ func runRead(cmd *cobra.Command, args []string) error {
 			client.Read(name, "new", 0, 0)
 		}
 	} else {
-		mode := "new"
+		mode := daemon.ReadModeNew
 		if readAllFlag || readHeadFlag > 0 || readTailFlag > 0 {
-			mode = "all"
+			mode = daemon.ReadModeAll
 		}
 		output, pos, err = client.Read(name, mode, headLines, tailLines)
 	}

@@ -441,9 +441,9 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		return nil, fmt.Errorf("head and tail require positive integers")
 	}
 
-	mode := "new"
+	mode := daemon.ReadModeNew
 	if a.All || a.Head > 0 || a.Tail > 0 {
-		mode = "all"
+		mode = daemon.ReadModeAll
 	}
 
 	if a.WaitPattern != "" || a.SettleMs > 0 {
