@@ -38,6 +38,23 @@ func (r *ToolRegistry) List() []ToolDef {
 						"type":        "string",
 						"description": "Command to run (e.g., 'python3', 'ssh user@host', 'psql -d mydb'). Defaults to user's shell.",
 					},
+					"env": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Environment variables to set (KEY=VALUE format)",
+					},
+					"cwd": map[string]interface{}{
+						"type":        "string",
+						"description": "Working directory for the session",
+					},
+					"cols": map[string]interface{}{
+						"type":        "integer",
+						"description": "Terminal columns (default: 80)",
+					},
+					"rows": map[string]interface{}{
+						"type":        "integer",
+						"description": "Terminal rows (default: 24)",
+					},
 				},
 				"required": []string{"name"},
 			},
@@ -182,6 +199,56 @@ func (r *ToolRegistry) List() []ToolDef {
 			},
 		},
 		{
+			Name:        "info",
+			Description: "Get detailed information about a session including state, PID, command, buffer size, terminal dimensions, and uptime",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "clear",
+			Description: "Clear the output buffer of a session and reset the read position. The session continues running.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
+			Name:        "resize",
+			Description: "Resize terminal dimensions of a running session. At least one of cols or rows must be specified.",
+			InputSchema: map[string]interface{}{
+				"type": "object",
+				"properties": map[string]interface{}{
+					"name": map[string]interface{}{
+						"type":        "string",
+						"description": "Session name",
+					},
+					"cols": map[string]interface{}{
+						"type":        "integer",
+						"description": "Terminal columns (optional, keeps current if not specified)",
+					},
+					"rows": map[string]interface{}{
+						"type":        "integer",
+						"description": "Terminal rows (optional, keeps current if not specified)",
+					},
+				},
+				"required": []string{"name"},
+			},
+		},
+		{
 			Name:        "search",
 			Description: "Search session output buffer for regex patterns with context lines",
 			InputSchema: map[string]interface{}{
@@ -242,6 +309,12 @@ func (r *ToolRegistry) Call(name string, args json.RawMessage) (*CallToolResult,
 		return r.callStop(args)
 	case "kill":
 		return r.callKill(args)
+	case "info":
+		return r.callInfo(args)
+	case "clear":
+		return r.callClear(args)
+	case "resize":
+		return r.callResize(args)
 	case "search":
 		return r.callSearch(args)
 	default:
@@ -250,8 +323,12 @@ func (r *ToolRegistry) Call(name string, args json.RawMessage) (*CallToolResult,
 }
 
 type CreateArgs struct {
-	Name    string `json:"name"`
-	Command string `json:"command"`
+	Name    string   `json:"name"`
+	Command string   `json:"command"`
+	Env     []string `json:"env"`
+	Cwd     string   `json:"cwd"`
+	Cols    int      `json:"cols"`
+	Rows    int      `json:"rows"`
 }
 
 func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error) {
@@ -260,7 +337,13 @@ func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error)
 		return nil, fmt.Errorf("parse args: %w", err)
 	}
 
-	data, err := r.client.Create(a.Name, a.Command)
+	data, err := r.client.Create(a.Name, daemon.CreateOptions{
+		Command: a.Command,
+		Env:     a.Env,
+		Cwd:     a.Cwd,
+		Cols:    a.Cols,
+		Rows:    a.Rows,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -571,6 +654,82 @@ func (r *ToolRegistry) callKill(args json.RawMessage) (*CallToolResult, error) {
 
 	return &CallToolResult{
 		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("session %q killed", a.Name)}},
+	}, nil
+}
+
+type InfoArgs struct {
+	Name string `json:"name"`
+}
+
+func (r *ToolRegistry) callInfo(args json.RawMessage) (*CallToolResult, error) {
+	var a InfoArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	info, err := r.client.Info(a.Name)
+	if err != nil {
+		return nil, err
+	}
+
+	data, _ := json.MarshalIndent(info, "", "  ")
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(data)}},
+	}, nil
+}
+
+type ClearArgs struct {
+	Name string `json:"name"`
+}
+
+func (r *ToolRegistry) callClear(args json.RawMessage) (*CallToolResult, error) {
+	var a ClearArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	if err := r.client.Clear(a.Name); err != nil {
+		return nil, err
+	}
+
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: fmt.Sprintf("session %q cleared", a.Name)}},
+	}, nil
+}
+
+type ResizeArgs struct {
+	Name string `json:"name"`
+	Cols int    `json:"cols"`
+	Rows int    `json:"rows"`
+}
+
+func (r *ToolRegistry) callResize(args json.RawMessage) (*CallToolResult, error) {
+	var a ResizeArgs
+	if err := json.Unmarshal(args, &a); err != nil {
+		return nil, fmt.Errorf("parse args: %w", err)
+	}
+
+	if a.Cols <= 0 && a.Rows <= 0 {
+		return nil, fmt.Errorf("at least one of cols or rows is required")
+	}
+
+	if err := r.client.Resize(a.Name, a.Cols, a.Rows); err != nil {
+		return nil, err
+	}
+
+	result := map[string]interface{}{
+		"name":   a.Name,
+		"status": "resized",
+	}
+	if a.Cols > 0 {
+		result["cols"] = a.Cols
+	}
+	if a.Rows > 0 {
+		result["rows"] = a.Rows
+	}
+	data, _ := json.MarshalIndent(result, "", "  ")
+	return &CallToolResult{
+		Content: []ContentBlock{{Type: "text", Text: string(data)}},
 	}, nil
 }
 

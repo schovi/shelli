@@ -28,5 +28,8 @@ func init() {
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(killCmd)
 	rootCmd.AddCommand(searchCmd)
+	rootCmd.AddCommand(infoCmd)
+	rootCmd.AddCommand(clearCmd)
+	rootCmd.AddCommand(resizeCmd)
 	rootCmd.AddCommand(versionCmd)
 }

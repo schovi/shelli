@@ -1,11 +1,18 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/spf13/cobra"
 )
+
+var killJsonFlag bool
+
+func init() {
+	killCmd.Flags().BoolVar(&killJsonFlag, "json", false, "Output as JSON")
+}
 
 var killCmd = &cobra.Command{
 	Use:   "kill <name>",
@@ -26,6 +33,15 @@ func runKill(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("Killed session %q\n", name)
+	if killJsonFlag {
+		out := map[string]interface{}{
+			"name":   name,
+			"status": "killed",
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+	} else {
+		fmt.Printf("Killed session %q\n", name)
+	}
 	return nil
 }

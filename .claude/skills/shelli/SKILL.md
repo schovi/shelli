@@ -11,7 +11,12 @@ MCP tools map directly to CLI commands:
 - `shelli/exec` → `shelli exec`
 - `shelli/send` → `shelli send`
 - `shelli/read` → `shelli read`
+- `shelli/search` → `shelli search`
 - `shelli/list` → `shelli list`
+- `shelli/info` → `shelli info`
+- `shelli/clear` → `shelli clear`
+- `shelli/resize` → `shelli resize`
+- `shelli/stop` → `shelli stop`
 - `shelli/kill` → `shelli kill`
 
 If MCP tools are not available, use the Bash commands documented below.
@@ -37,11 +42,15 @@ Do NOT use shelli for:
 ### create - Create a new session
 
 ```bash
-shelli create <name> [--cmd "command"] [--json]
+shelli create <name> [flags]
 ```
 
-- `name`: Unique identifier for the session
-- `--cmd`: Command to run (default: user's shell)
+Flags:
+- `--cmd "command"`: Command to run (default: user's shell)
+- `--env KEY=VALUE`: Set environment variable (repeatable)
+- `--cwd /path`: Set working directory
+- `--cols N`: Terminal columns (default: 80)
+- `--rows N`: Terminal rows (default: 24)
 - `--json`: Output session info as JSON
 
 Examples:
@@ -52,6 +61,8 @@ shelli create node --cmd "node"              # Node.js REPL
 shelli create db --cmd "psql -d mydb"        # PostgreSQL
 shelli create server --cmd "ssh user@host"   # SSH session
 shelli create redis --cmd "redis-cli"        # Redis CLI
+shelli create dev --env "DEBUG=1" --cwd /app # with env and working dir
+shelli create wide --cols 200 --rows 50      # large terminal
 ```
 
 ### exec - Send command and wait for result (primary command for AI)
@@ -158,13 +169,51 @@ shelli list [--json]
 
 Shows name, PID, command, created time, running status.
 
+### info - Get detailed session info
+
+```bash
+shelli info <name> [--json]
+```
+
+Shows detailed session information: name, state, pid, command, created_at, stopped_at (if stopped), uptime, buffer size, read position, terminal dimensions.
+
+### clear - Clear output buffer
+
+```bash
+shelli clear <name> [--json]
+```
+
+Truncates the output buffer and resets the read position. The session continues running.
+
+### resize - Change terminal dimensions
+
+```bash
+shelli resize <name> [--cols N] [--rows N] [--json]
+```
+
+At least one of `--cols` or `--rows` must be specified. Omitted dimensions keep their current value.
+
+Examples:
+```bash
+shelli resize myshell --cols 120 --rows 40   # set both
+shelli resize myshell --cols 200             # change only width
+```
+
+### stop - Stop session (keep output)
+
+```bash
+shelli stop <name> [--json]
+```
+
+Terminates the process but keeps output readable. Session stays in list with state "stopped".
+
 ### kill - Kill a session
 
 ```bash
-shelli kill <name>
+shelli kill <name> [--json]
 ```
 
-Terminates the session and cleans up resources.
+Terminates the session and cleans up all resources (output and metadata).
 
 ## Escape Sequences (for send --raw)
 

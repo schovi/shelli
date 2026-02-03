@@ -78,6 +78,21 @@ func (s *MemoryStorage) Size(session string) (int64, error) {
 	return int64(len(output)), nil
 }
 
+func (s *MemoryStorage) Clear(session string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.metas[session]; !exists {
+		return fmt.Errorf("session %q not found", session)
+	}
+
+	s.outputs[session] = []byte{}
+	if meta, ok := s.metas[session]; ok {
+		meta.ReadPos = 0
+	}
+	return nil
+}
+
 func (s *MemoryStorage) Create(session string, meta *SessionMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -15,12 +15,22 @@ var createCmd = &cobra.Command{
 	RunE:  runCreate,
 }
 
-var createCmdFlag string
-var createJsonFlag bool
+var (
+	createCmdFlag  string
+	createJsonFlag bool
+	createEnvFlag  []string
+	createCwdFlag  string
+	createColsFlag int
+	createRowsFlag int
+)
 
 func init() {
 	createCmd.Flags().StringVar(&createCmdFlag, "cmd", "", "Command to run (default: $SHELL)")
 	createCmd.Flags().BoolVar(&createJsonFlag, "json", false, "Output as JSON")
+	createCmd.Flags().StringArrayVar(&createEnvFlag, "env", nil, "Set environment variable (KEY=VALUE), can be repeated")
+	createCmd.Flags().StringVar(&createCwdFlag, "cwd", "", "Set working directory")
+	createCmd.Flags().IntVar(&createColsFlag, "cols", 80, "Terminal columns")
+	createCmd.Flags().IntVar(&createRowsFlag, "rows", 24, "Terminal rows")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -31,7 +41,13 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daemon: %w", err)
 	}
 
-	data, err := client.Create(name, createCmdFlag)
+	data, err := client.Create(name, daemon.CreateOptions{
+		Command: createCmdFlag,
+		Env:     createEnvFlag,
+		Cwd:     createCwdFlag,
+		Cols:    createColsFlag,
+		Rows:    createRowsFlag,
+	})
 	if err != nil {
 		return err
 	}

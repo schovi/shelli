@@ -224,19 +224,23 @@ func (s *Server) Shutdown() {
 }
 
 type Request struct {
-	Action     string `json:"action"`
-	Name       string `json:"name,omitempty"`
-	Command    string `json:"command,omitempty"`
-	Input      string `json:"input,omitempty"`
-	Newline    bool   `json:"newline,omitempty"`
-	Mode       string `json:"mode,omitempty"`
-	HeadLines  int    `json:"head_lines,omitempty"`
-	TailLines  int    `json:"tail_lines,omitempty"`
-	Pattern    string `json:"pattern,omitempty"`
-	Before     int    `json:"before,omitempty"`
-	After      int    `json:"after,omitempty"`
-	IgnoreCase bool   `json:"ignore_case,omitempty"`
-	StripANSI  bool   `json:"strip_ansi,omitempty"`
+	Action     string   `json:"action"`
+	Name       string   `json:"name,omitempty"`
+	Command    string   `json:"command,omitempty"`
+	Input      string   `json:"input,omitempty"`
+	Newline    bool     `json:"newline,omitempty"`
+	Mode       string   `json:"mode,omitempty"`
+	HeadLines  int      `json:"head_lines,omitempty"`
+	TailLines  int      `json:"tail_lines,omitempty"`
+	Pattern    string   `json:"pattern,omitempty"`
+	Before     int      `json:"before,omitempty"`
+	After      int      `json:"after,omitempty"`
+	IgnoreCase bool     `json:"ignore_case,omitempty"`
+	StripANSI  bool     `json:"strip_ansi,omitempty"`
+	Cols       int      `json:"cols,omitempty"`
+	Rows       int      `json:"rows,omitempty"`
+	Env        []string `json:"env,omitempty"`
+	Cwd        string   `json:"cwd,omitempty"`
 }
 
 type Response struct {
@@ -270,6 +274,12 @@ func (s *Server) handleConn(conn net.Conn) {
 		resp = s.handleKill(req)
 	case "search":
 		resp = s.handleSearch(req)
+	case "info":
+		resp = s.handleInfo(req)
+	case "clear":
+		resp = s.handleClear(req)
+	case "resize":
+		resp = s.handleResize(req)
 	case "ping":
 		resp = Response{Success: true, Data: "pong"}
 	default:
@@ -309,9 +319,24 @@ func (s *Server) handleCreate(req Request) Response {
 	} else {
 		cmd = exec.Command(command)
 	}
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
-	ptmx, err := pty.Start(cmd)
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	cmd.Env = append(cmd.Env, req.Env...)
+
+	if req.Cwd != "" {
+		cmd.Dir = req.Cwd
+	}
+
+	cols := req.Cols
+	if cols <= 0 {
+		cols = 80
+	}
+	rows := req.Rows
+	if rows <= 0 {
+		rows = 24
+	}
+
+	ptmx, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
 	if err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("start pty: %v", err)}
 	}
@@ -324,6 +349,8 @@ func (s *Server) handleCreate(req Request) Response {
 		State:     StateRunning,
 		CreatedAt: now,
 		ReadPos:   0,
+		Cols:      cols,
+		Rows:      rows,
 	}
 
 	if err := s.storage.Create(req.Name, meta); err != nil {
@@ -352,6 +379,8 @@ func (s *Server) handleCreate(req Request) Response {
 		"pid":        sess.PID,
 		"command":    sess.Command,
 		"created_at": sess.CreatedAt,
+		"cols":       cols,
+		"rows":       rows,
 	}}
 }
 
@@ -686,5 +715,121 @@ func (s *Server) handleSearch(req Request) Response {
 	return Response{Success: true, Data: map[string]interface{}{
 		"matches":       matches,
 		"total_matches": len(matches),
+	}}
+}
+
+func (s *Server) handleInfo(req Request) Response {
+	s.mu.Lock()
+	sess, exists := s.sessions[req.Name]
+	if !exists {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+	storage := s.storage
+	s.mu.Unlock()
+
+	meta, err := storage.LoadMeta(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
+	}
+
+	size, err := storage.Size(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("get size: %v", err)}
+	}
+
+	result := map[string]interface{}{
+		"name":           sess.Name,
+		"state":          string(sess.State),
+		"pid":            sess.PID,
+		"command":        sess.Command,
+		"created_at":     sess.CreatedAt.Format(time.RFC3339),
+		"bytes_buffered": size,
+		"read_position":  meta.ReadPos,
+		"cols":           meta.Cols,
+		"rows":           meta.Rows,
+	}
+
+	if sess.StoppedAt != nil {
+		result["stopped_at"] = sess.StoppedAt.Format(time.RFC3339)
+	}
+
+	if sess.State == StateRunning {
+		result["uptime_seconds"] = time.Since(sess.CreatedAt).Seconds()
+	}
+
+	return Response{Success: true, Data: result}
+}
+
+func (s *Server) handleClear(req Request) Response {
+	s.mu.Lock()
+	_, exists := s.sessions[req.Name]
+	if !exists {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+	storage := s.storage
+	s.mu.Unlock()
+
+	if err := storage.Clear(req.Name); err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("clear: %v", err)}
+	}
+
+	return Response{Success: true}
+}
+
+func (s *Server) handleResize(req Request) Response {
+	if req.Cols <= 0 && req.Rows <= 0 {
+		return Response{Success: false, Error: "at least one of cols or rows is required"}
+	}
+
+	s.mu.Lock()
+	sess, exists := s.sessions[req.Name]
+	if !exists {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+
+	if sess.State != StateRunning {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q is stopped", req.Name)}
+	}
+
+	ptmx, ok := s.ptys[req.Name]
+	if !ok {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q not running", req.Name)}
+	}
+
+	storage := s.storage
+	s.mu.Unlock()
+
+	meta, err := storage.LoadMeta(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
+	}
+
+	cols := req.Cols
+	rows := req.Rows
+	if cols <= 0 {
+		cols = meta.Cols
+	}
+	if rows <= 0 {
+		rows = meta.Rows
+	}
+
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("resize: %v", err)}
+	}
+
+	meta.Cols = cols
+	meta.Rows = rows
+	if err := storage.SaveMeta(req.Name, meta); err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("save meta: %v", err)}
+	}
+
+	return Response{Success: true, Data: map[string]interface{}{
+		"cols": cols,
+		"rows": rows,
 	}}
 }

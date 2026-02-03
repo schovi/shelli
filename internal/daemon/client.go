@@ -50,7 +50,15 @@ func (c *Client) Ping() bool {
 	return err == nil && resp.Success
 }
 
-func (c *Client) Create(name, command string) (map[string]interface{}, error) {
+type CreateOptions struct {
+	Command string
+	Env     []string
+	Cwd     string
+	Cols    int
+	Rows    int
+}
+
+func (c *Client) Create(name string, opts CreateOptions) (map[string]interface{}, error) {
 	if err := ValidateSessionName(name); err != nil {
 		return nil, err
 	}
@@ -58,7 +66,11 @@ func (c *Client) Create(name, command string) (map[string]interface{}, error) {
 	resp, err := c.send(Request{
 		Action:  "create",
 		Name:    name,
-		Command: command,
+		Command: opts.Command,
+		Env:     opts.Env,
+		Cwd:     opts.Cwd,
+		Cols:    opts.Cols,
+		Rows:    opts.Rows,
 	})
 	if err != nil {
 		return nil, err
@@ -183,6 +195,70 @@ type SearchMatch struct {
 type SearchResponse struct {
 	Matches      []SearchMatch `json:"matches"`
 	TotalMatches int           `json:"total_matches"`
+}
+
+type InfoResponse struct {
+	Name          string  `json:"name"`
+	State         string  `json:"state"`
+	PID           int     `json:"pid"`
+	Command       string  `json:"command"`
+	CreatedAt     string  `json:"created_at"`
+	StoppedAt     string  `json:"stopped_at,omitempty"`
+	BytesBuffered int64   `json:"bytes_buffered"`
+	ReadPosition  int64   `json:"read_position"`
+	Cols          int     `json:"cols"`
+	Rows          int     `json:"rows"`
+	Uptime        float64 `json:"uptime_seconds,omitempty"`
+}
+
+func (c *Client) Clear(name string) error {
+	resp, err := c.send(Request{
+		Action: "clear",
+		Name:   name,
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
+}
+
+func (c *Client) Resize(name string, cols, rows int) error {
+	resp, err := c.send(Request{
+		Action: "resize",
+		Name:   name,
+		Cols:   cols,
+		Rows:   rows,
+	})
+	if err != nil {
+		return err
+	}
+	if !resp.Success {
+		return fmt.Errorf("%s", resp.Error)
+	}
+	return nil
+}
+
+func (c *Client) Info(name string) (*InfoResponse, error) {
+	resp, err := c.send(Request{
+		Action: "info",
+		Name:   name,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !resp.Success {
+		return nil, fmt.Errorf("%s", resp.Error)
+	}
+
+	data, _ := json.Marshal(resp.Data)
+	var result InfoResponse
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("parse response: %w", err)
+	}
+	return &result, nil
 }
 
 func (c *Client) Search(req SearchRequest) (*SearchResponse, error) {

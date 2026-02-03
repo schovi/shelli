@@ -1,11 +1,18 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/spf13/cobra"
 )
+
+var stopJsonFlag bool
+
+func init() {
+	stopCmd.Flags().BoolVar(&stopJsonFlag, "json", false, "Output as JSON")
+}
 
 var stopCmd = &cobra.Command{
 	Use:   "stop <name>",
@@ -27,6 +34,15 @@ func runStop(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("Stopped session %q\n", name)
+	if stopJsonFlag {
+		out := map[string]interface{}{
+			"name":   name,
+			"status": "stopped",
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+	} else {
+		fmt.Printf("Stopped session %q\n", name)
+	}
 	return nil
 }

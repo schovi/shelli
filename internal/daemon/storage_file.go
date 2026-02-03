@@ -104,6 +104,42 @@ func (s *FileStorage) Size(session string) (int64, error) {
 	return info.Size(), nil
 }
 
+func (s *FileStorage) Clear(session string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, err := os.Stat(s.metaPath(session)); os.IsNotExist(err) {
+		return fmt.Errorf("session %q not found", session)
+	}
+
+	if err := os.Truncate(s.outputPath(session), 0); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("truncate output: %w", err)
+	}
+
+	meta, err := s.loadMetaLocked(session)
+	if err != nil {
+		return err
+	}
+	meta.ReadPos = 0
+	return s.saveMetaLocked(session, meta)
+}
+
+func (s *FileStorage) loadMetaLocked(session string) (*SessionMeta, error) {
+	data, err := os.ReadFile(s.metaPath(session))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("session %q not found", session)
+		}
+		return nil, fmt.Errorf("read meta: %w", err)
+	}
+
+	var meta SessionMeta
+	if err := json.Unmarshal(data, &meta); err != nil {
+		return nil, fmt.Errorf("parse meta: %w", err)
+	}
+	return &meta, nil
+}
+
 func (s *FileStorage) Create(session string, meta *SessionMeta) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

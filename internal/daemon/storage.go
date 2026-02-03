@@ -17,6 +17,8 @@ type SessionMeta struct {
 	CreatedAt time.Time    `json:"created_at"`
 	StoppedAt *time.Time   `json:"stopped_at,omitempty"`
 	ReadPos   int64        `json:"read_pos"`
+	Cols      int          `json:"cols"`
+	Rows      int          `json:"rows"`
 }
 
 type OutputStorage interface {
@@ -24,6 +26,7 @@ type OutputStorage interface {
 	ReadFrom(session string, offset int64) ([]byte, error)
 	ReadAll(session string) ([]byte, error)
 	Size(session string) (int64, error)
+	Clear(session string) error
 
 	Create(session string, meta *SessionMeta) error
 	Delete(session string) error

@@ -1,12 +1,19 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/schovi/shelli/internal/escape"
 	"github.com/spf13/cobra"
 )
+
+var sendJsonFlag bool
+
+func init() {
+	sendCmd.Flags().BoolVar(&sendJsonFlag, "json", false, "Output as JSON")
+}
 
 var sendCmd = &cobra.Command{
 	Use:   "send <name> <input> [input...]",
@@ -66,9 +73,18 @@ func runSend(cmd *cobra.Command, args []string) error {
 		totalBytes += len(interpreted)
 	}
 
-	if len(inputs) == 1 {
+	switch {
+	case sendJsonFlag:
+		out := map[string]interface{}{
+			"status": "sent",
+			"count":  len(inputs),
+			"bytes":  totalBytes,
+		}
+		data, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(data))
+	case len(inputs) == 1:
 		fmt.Printf("Sent to %q (%d bytes)\n", name, totalBytes)
-	} else {
+	default:
 		fmt.Printf("Sent %d inputs to %q (%d bytes total)\n", len(inputs), name, totalBytes)
 	}
 	return nil

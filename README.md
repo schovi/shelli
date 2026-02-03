@@ -61,13 +61,16 @@ Add shelli as an MCP server in `~/.claude/settings.json`:
 }
 ```
 
-This exposes 8 MCP tools to Claude:
+This exposes 11 MCP tools to Claude:
 - `shelli/create` - Create a new session
 - `shelli/exec` - Send input and wait for output (primary tool)
 - `shelli/send` - Send input without waiting
 - `shelli/read` - Read session output
 - `shelli/search` - Search output buffer with regex
 - `shelli/list` - List all sessions
+- `shelli/info` - Get detailed session info
+- `shelli/clear` - Clear output buffer
+- `shelli/resize` - Change terminal dimensions
 - `shelli/stop` - Stop session, keep output accessible
 - `shelli/kill` - Stop and delete session
 
@@ -110,8 +113,16 @@ Claude: [creates python3 session, imports pandas, loads file interactively]
 Create a new interactive session.
 
 ```bash
-shelli create <name> [--cmd "command"] [--json]
+shelli create <name> [flags]
 ```
+
+Flags:
+- `--cmd "command"` - Command to run (default: $SHELL)
+- `--env KEY=VALUE` - Set environment variable (repeatable)
+- `--cwd /path` - Set working directory
+- `--cols N` - Terminal columns (default: 80)
+- `--rows N` - Terminal rows (default: 24)
+- `--json` - Output as JSON
 
 Examples:
 ```bash
@@ -119,6 +130,8 @@ shelli create myshell                        # default shell
 shelli create pyrepl --cmd "python3"         # Python REPL
 shelli create db --cmd "psql -d mydb"        # PostgreSQL
 shelli create server --cmd "ssh user@host"   # SSH session
+shelli create dev --env "DEBUG=1" --cwd /app # with env and cwd
+shelli create wide --cols 200 --rows 50      # large terminal
 ```
 
 ### exec
@@ -233,12 +246,48 @@ shelli list [--json]
 
 Output shows: `name`, `state` (running/stopped), `pid`, `command`
 
+### info
+
+Get detailed information about a session.
+
+```bash
+shelli info <name> [--json]
+```
+
+Shows: name, state, pid, command, created_at, stopped_at (if stopped), uptime, buffer size, read position, terminal dimensions.
+
+### clear
+
+Clear the output buffer of a session.
+
+```bash
+shelli clear <name> [--json]
+```
+
+Truncates the output buffer and resets the read position. The session continues running.
+
+### resize
+
+Change terminal dimensions of a running session.
+
+```bash
+shelli resize <name> [--cols N] [--rows N] [--json]
+```
+
+At least one of `--cols` or `--rows` must be specified. Omitted dimensions keep their current value.
+
+Examples:
+```bash
+shelli resize myshell --cols 120 --rows 40   # set both
+shelli resize myshell --cols 200             # change only width
+```
+
 ### stop
 
 Stop a running session but keep output accessible.
 
 ```bash
-shelli stop <name>
+shelli stop <name> [--json]
 ```
 
 The process is terminated (SIGTERM → SIGKILL) but:
@@ -251,7 +300,7 @@ The process is terminated (SIGTERM → SIGKILL) but:
 Stop and delete a session completely.
 
 ```bash
-shelli kill <name>
+shelli kill <name> [--json]
 ```
 
 This is a compound operation:
@@ -391,7 +440,8 @@ shelli uses a daemon process to maintain PTY handles across CLI invocations:
                                │ Unix socket
 ┌──────────────────────────────┴──────────────────────────────────────┐
 │                         shelli CLI                                   │
-│  $ shelli create / exec / send / read / search / list / stop / kill │
+│  $ shelli create / exec / send / read / search / list / info /       │
+│  $         clear / resize / stop / kill                              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
