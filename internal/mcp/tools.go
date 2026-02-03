@@ -110,7 +110,7 @@ func (r *ToolRegistry) List() []ToolDef {
 					"inputs": map[string]interface{}{
 						"type":        "array",
 						"items":       map[string]interface{}{"type": "string"},
-						"description": "Multiple inputs, each sent as separate write to PTY. Use for TUI apps that need input chunks to arrive separately. Mutually exclusive with input and input_base64.",
+						"description": "PREFERRED for sequences. Send multiple inputs in one call - each as separate PTY write. Use when sending message + Enter (e.g., [\"text\", \"\\r\"]), commands + confirmations, or any multi-step input. More efficient than multiple send calls. Mutually exclusive with input and input_base64.",
 					},
 					"input_base64": map[string]interface{}{
 						"type":        "string",

@@ -140,31 +140,42 @@ shelli read devserver --wait 'ready' --timeout 60
 - "openclaw tui", "connect to OpenClaw..."
 - "message the agent on the server..."
 
-**Key insight:** Line-based TUIs like OpenClaw work with shelli but need a **two-step submit pattern**.
+**Key insight:** Line-based TUIs like OpenClaw work with shelli but need message + Enter sent as separate PTY writes.
 
-**Action:** SSH to host, launch TUI, use two-step send pattern.
+**Action:** SSH to host, launch TUI, send message and Enter together using `inputs` array.
 
+**MCP (preferred):**
+```json
+// Create SSH session
+{"name": "openclaw", "command": "ssh user@vps.example.com"}
+
+// Launch TUI
+{"name": "openclaw", "inputs": ["openclaw tui", "\r"]}
+
+// Send message + Enter in ONE call (not two!)
+{"name": "openclaw", "inputs": ["Hey Zephyr, checking in!", "\r"]}
+```
+
+**CLI equivalent:**
 ```bash
-# User says: "Connect to the VPS and chat with Zephyr"
 shelli create openclaw --cmd "ssh user@vps.example.com"
 shelli read openclaw --settle 3000
-shelli send openclaw "openclaw tui"
+shelli send openclaw "openclaw tui" "\r"
 shelli read openclaw --settle 3000
 
-# IMPORTANT: Two-step send pattern for TUI input
-# Step 1: Send message (goes to input buffer)
-shelli send openclaw "Hey Zephyr, checking in"
-# Step 2: Submit with raw carriage return
-shelli send openclaw "\r" --raw
+# Send message + Enter as separate writes (single command)
+shelli send openclaw "Hey Zephyr, checking in!" "\r"
 
 # Wait for AI response
 sleep 8
 shelli read openclaw --strip-ansi
 ```
 
-**Why two steps?** The TUI has an input buffer. Regular `send` puts text in the buffer but doesn't submit. Raw `\r` triggers the actual submit action.
+**Why `inputs` array?** The TUI has an input buffer. Each element in `inputs` is a separate PTY write - the text goes to the buffer, then `\r` triggers submit. This is more efficient than two separate calls.
 
-**Common mistake:** Using `exec` which auto-adds newline. The message appears in input field but never submits. Always use `send` + raw `\r` for TUI chat apps.
+**Common mistakes:**
+- Using `exec` which auto-adds newline (message appears in input field but never submits)
+- Making two separate `send` calls instead of one with `inputs` array (wastes API tokens)
 
 ## Decision Logic
 
@@ -252,11 +263,11 @@ If a session becomes unresponsive:
 
 ```bash
 # Try interrupt first
-shelli send session "\x03" --raw
+shelli send session "\x03"
 shelli read session --settle 1000
 
 # If still stuck, try EOF
-shelli send session "\x04" --raw
+shelli send session "\x04"
 
 # Last resort: kill and recreate
 shelli kill session
@@ -271,7 +282,8 @@ shelli create session --cmd "original-command"
 |----------|-----------------|
 | `shelli/create {"name": "py", "command": "python3"}` | `shelli create py --cmd "python3"` |
 | `shelli/exec {"name": "py", "input": "x = 1", "wait_pattern": ">>>"}` | `shelli exec py "x = 1" --wait '>>>'` |
-| `shelli/send {"name": "py", "input": "\\x03", "raw": true}` | `shelli send py "\\x03" --raw` |
+| `shelli/send {"name": "py", "input": "\\x03"}` | `shelli send py "\\x03"` |
+| `shelli/send {"name": "py", "inputs": ["msg", "\\r"]}` | `shelli send py "msg" "\\r"` |
 | `shelli/read {"name": "py", "all": true, "strip_ansi": true}` | `shelli read py --all --strip-ansi` |
 | `shelli/list {}` | `shelli list` |
 | `shelli/kill {"name": "py"}` | `shelli kill py` |

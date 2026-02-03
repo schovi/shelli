@@ -184,6 +184,20 @@ shelli send myshell "\x04"              # send Ctrl+D (EOF)
 shelli send myshell "y"                 # send 'y' without newline
 ```
 
+**MCP: Special characters and `input_base64`**
+
+When using MCP tools, characters like `!` can cause bash history expansion issues. For inputs with special characters or binary data, use `input_base64`:
+
+```json
+// Avoids bash escaping issues with "!"
+{"name": "session", "input_base64": "SGVsbG8gWmVwaHlyIQ=="}
+```
+
+The `inputs` array is preferred for multi-step sequences (e.g., message + Enter):
+```json
+{"name": "session", "inputs": ["Hello", "\r"]}
+```
+
 ### read
 
 Read output from a session.

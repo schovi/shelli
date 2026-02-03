@@ -311,6 +311,46 @@ Trade-off: 33% larger payload, but eliminates all escaping complexity.
 
 Note: `input` and `input_base64` are mutually exclusive - use one or the other.
 
+## Multi-Input: Use `inputs` Array for Sequences
+
+When sending content followed by Enter/Return or any multi-step input, **always use the `inputs` array** in a single MCP call. This is more efficient than multiple separate calls.
+
+### When to Use `inputs`
+
+```json
+// CORRECT - single call, two PTY writes
+{"name": "session", "inputs": ["Hello Zephyr!", "\r"]}
+
+// WRONG - wastes tokens on two calls
+{"name": "session", "input": "Hello Zephyr!"}  // first call
+{"name": "session", "input": "\r"}              // second call
+```
+
+### Common Patterns
+
+| Scenario | MCP JSON |
+|----------|----------|
+| Message + Enter | `{"inputs": ["your message", "\r"]}` |
+| Command + confirmation | `{"inputs": ["rm -i file.txt", "\r", "y", "\r"]}` |
+| Multi-line input | `{"inputs": ["line1", "\r", "line2", "\r"]}` |
+| Password entry | `{"inputs": ["password123", "\r"]}` |
+
+### Why This Matters
+
+- **Efficiency**: One API call instead of two (or more)
+- **Correctness**: TUI apps often need Enter as a separate PTY write event
+- **Token savings**: Less overhead per interaction
+
+### CLI Equivalent
+
+The CLI already supports this pattern with multiple arguments:
+
+```bash
+shelli send session "message" "\r"
+```
+
+This sends `"message"` and `"\r"` as separate writes, matching the MCP `inputs` behavior.
+
 ## Best Practices
 
 ### Settle Times
