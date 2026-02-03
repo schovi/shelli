@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/schovi/shelli/internal/escape"
@@ -10,14 +9,14 @@ import (
 )
 
 var sendCmd = &cobra.Command{
-	Use:   "send <name> <input>",
-	Short: "Send input to a session (newline by default)",
-	Long: `Send input to a session. Appends newline by default.
+	Use:   "send <name> <input> [input...]",
+	Short: "Send raw input to a session",
+	Long: `Send raw input to a session. Low-level command for precise control.
 
-Use --raw to send without newline and with escape sequence interpretation.
-This is useful for control characters like Ctrl+C.
+Each argument is sent as a separate write to the PTY.
+Escape sequences are always interpreted. No newline is added automatically.
 
-Escape sequences (with --raw):
+Escape sequences:
   \x00-\xFF  Hex byte (e.g., \x03 for Ctrl+C)
   \n         Newline (LF)
   \r         Carriage return (CR)
@@ -34,48 +33,43 @@ Common control characters:
   \x0c  Ctrl+L (clear screen)
 
 Examples:
-  shelli send session "ls -la"           # normal command
-  shelli send session "\x03" --raw       # send Ctrl+C
-  shelli send session "\x04" --raw       # send Ctrl+D (EOF)
-  shelli send session "y" --raw          # send 'y' without newline
-  shelli send session "user\tname" --raw # send with tab`,
+  shelli send session "ls -la\n"      # command with newline
+  shelli send session "hello" "\r"    # TUI: type "hello", then Enter (separate writes)
+  shelli send session "hello\r"       # TUI: same but single write (may not work for all TUIs)
+  shelli send session "\x03"          # send Ctrl+C
+  shelli send session "\x04"          # send Ctrl+D (EOF)
+  shelli send session "y"             # send 'y' without newline
+  shelli send session "path\\nname"   # literal backslash-n (escaped)`,
 	Args: cobra.MinimumNArgs(2),
 	RunE: runSend,
 }
 
-var sendRawFlag bool
-
-func init() {
-	sendCmd.Flags().BoolVar(&sendRawFlag, "raw", false, "No newline, interpret escape sequences")
-}
-
 func runSend(cmd *cobra.Command, args []string) error {
 	name := args[0]
-	input := strings.Join(args[1:], " ")
+	inputs := args[1:]
 
 	client := daemon.NewClient()
 	if err := client.EnsureDaemon(); err != nil {
 		return fmt.Errorf("daemon: %w", err)
 	}
 
-	if sendRawFlag {
-		// Interpret escape sequences
+	totalBytes := 0
+	for _, input := range inputs {
 		interpreted, err := escape.Interpret(input)
 		if err != nil {
 			return fmt.Errorf("escape sequence error: %w", err)
 		}
-		input = interpreted
+
+		if err := client.Send(name, interpreted, false); err != nil {
+			return err
+		}
+		totalBytes += len(interpreted)
 	}
 
-	newline := !sendRawFlag
-	if err := client.Send(name, input, newline); err != nil {
-		return err
-	}
-
-	if sendRawFlag {
-		fmt.Printf("Sent raw to %q (%d bytes)\n", name, len(input))
+	if len(inputs) == 1 {
+		fmt.Printf("Sent to %q (%d bytes)\n", name, totalBytes)
 	} else {
-		fmt.Printf("Sent to %q\n", name)
+		fmt.Printf("Sent %d inputs to %q (%d bytes total)\n", len(inputs), name, totalBytes)
 	}
 	return nil
 }

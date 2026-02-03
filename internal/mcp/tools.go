@@ -82,7 +82,7 @@ func (r *ToolRegistry) List() []ToolDef {
 		},
 		{
 			Name:        "send",
-			Description: "Send input to a session without waiting. Use for control characters (Ctrl+C, Ctrl+D), answering prompts, or TUI apps that need two-step input (send message, then raw \\r to submit).",
+			Description: "Send raw input to a session without waiting. Low-level command for precise control. Escape sequences (\\n, \\r, \\x03, etc.) are always interpreted. No newline added automatically.",
 			InputSchema: map[string]interface{}{
 				"type": "object",
 				"properties": map[string]interface{}{
@@ -92,15 +92,16 @@ func (r *ToolRegistry) List() []ToolDef {
 					},
 					"input": map[string]interface{}{
 						"type":        "string",
-						"description": "Input to send. Use escape sequences for control chars: \\x03 (Ctrl+C), \\x04 (Ctrl+D), \\t (Tab), \\r (submit in TUIs). Mutually exclusive with input_base64.",
+						"description": "Input to send (escape sequences interpreted). Mutually exclusive with inputs and input_base64.",
+					},
+					"inputs": map[string]interface{}{
+						"type":        "array",
+						"items":       map[string]interface{}{"type": "string"},
+						"description": "Multiple inputs, each sent as separate write to PTY. Use for TUI apps that need input chunks to arrive separately. Mutually exclusive with input and input_base64.",
 					},
 					"input_base64": map[string]interface{}{
 						"type":        "string",
-						"description": "Input as base64 (fallback when JSON escaping is too complex). Mutually exclusive with input.",
-					},
-					"raw": map[string]interface{}{
-						"type":        "boolean",
-						"description": "If true, interprets escape sequences and does NOT add newline. If false (default), adds newline. TIP: For TUI chat apps, first send message (raw=false), then send \\r with raw=true to submit.",
+						"description": "Input as base64 (for binary data). Sent as single write, no escape interpretation. Mutually exclusive with input and inputs.",
 					},
 				},
 				"required": []string{"name"},
@@ -358,10 +359,10 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 }
 
 type SendArgs struct {
-	Name        string `json:"name"`
-	Input       string `json:"input"`
-	InputBase64 string `json:"input_base64"`
-	Raw         bool   `json:"raw"`
+	Name        string   `json:"name"`
+	Input       string   `json:"input"`
+	Inputs      []string `json:"inputs"`
+	InputBase64 string   `json:"input_base64"`
 }
 
 func (r *ToolRegistry) callSend(args json.RawMessage) (*CallToolResult, error) {
@@ -370,39 +371,74 @@ func (r *ToolRegistry) callSend(args json.RawMessage) (*CallToolResult, error) {
 		return nil, fmt.Errorf("parse args: %w", err)
 	}
 
-	if a.Input == "" && a.InputBase64 == "" {
-		return nil, fmt.Errorf("input or input_base64 is required")
+	// Validate mutually exclusive input options
+	inputCount := 0
+	if a.Input != "" {
+		inputCount++
+	}
+	if len(a.Inputs) > 0 {
+		inputCount++
+	}
+	if a.InputBase64 != "" {
+		inputCount++
+	}
+	if inputCount == 0 {
+		return nil, fmt.Errorf("one of input, inputs, or input_base64 is required")
+	}
+	if inputCount > 1 {
+		return nil, fmt.Errorf("input, inputs, and input_base64 are mutually exclusive")
 	}
 
-	input := a.Input
+	// Handle base64 input (no escape interpretation, single write)
 	if a.InputBase64 != "" {
-		if a.Input != "" {
-			return nil, fmt.Errorf("input and input_base64 are mutually exclusive")
-		}
 		decoded, err := base64.StdEncoding.DecodeString(a.InputBase64)
 		if err != nil {
 			return nil, fmt.Errorf("decode input_base64: %w", err)
 		}
-		input = string(decoded)
+		if err := r.client.Send(a.Name, string(decoded), false); err != nil {
+			return nil, err
+		}
+		result := map[string]interface{}{
+			"status": "sent",
+			"count":  1,
+			"bytes":  len(decoded),
+		}
+		data, _ := json.MarshalIndent(result, "", "  ")
+		return &CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: string(data)}},
+		}, nil
 	}
 
-	addNewline := true
+	// Build list of inputs to send
+	var inputs []string
+	if len(a.Inputs) > 0 {
+		inputs = a.Inputs
+	} else {
+		inputs = []string{a.Input}
+	}
 
-	if a.Raw {
-		var err error
-		input, err = escape.Interpret(input)
+	// Send each input as separate write, with escape interpretation
+	totalBytes := 0
+	for _, input := range inputs {
+		processed, err := escape.Interpret(input)
 		if err != nil {
 			return nil, fmt.Errorf("interpret escape sequences: %w", err)
 		}
-		addNewline = false
+
+		if err := r.client.Send(a.Name, processed, false); err != nil {
+			return nil, err
+		}
+		totalBytes += len(processed)
 	}
 
-	if err := r.client.Send(a.Name, input, addNewline); err != nil {
-		return nil, err
+	result := map[string]interface{}{
+		"status": "sent",
+		"count":  len(inputs),
+		"bytes":  totalBytes,
 	}
-
+	data, _ := json.MarshalIndent(result, "", "  ")
 	return &CallToolResult{
-		Content: []ContentBlock{{Type: "text", Text: "sent"}},
+		Content: []ContentBlock{{Type: "text", Text: string(data)}},
 	}, nil
 }
 

@@ -88,28 +88,31 @@ shelli exec session "command" --strip-ansi --json
 shelli exec session "slow_command" --settle 5000 --timeout 120
 ```
 
-### send - Send input without waiting
+### send - Send raw input without waiting
 
 ```bash
-shelli send <name> <input> [--raw]
+shelli send <name> <input> [input...]
 ```
 
-- Normal mode (default): Appends newline, sends as-is
-- Raw mode (`--raw`): No newline, interprets escape sequences
+Low-level command for precise control:
+- Each argument is sent as a separate write to PTY
+- Escape sequences are always interpreted
+- No newline added automatically
 
 Use `send` for:
 - Sending control characters (Ctrl+C, Ctrl+D)
 - Answering prompts without newlines
+- TUI apps that need separate input chunks
 - Fine-grained control over input timing
 
 Examples:
 ```bash
-shelli send myshell "ls -la"           # command + newline
-shelli send pyrepl "print('hi')"       # to Python + newline
-shelli send myshell "\x03" --raw       # Ctrl+C (interrupt)
-shelli send myshell "\x04" --raw       # Ctrl+D (EOF)
-shelli send myshell "y" --raw          # 'y' without newline
-shelli send myshell "" --raw           # just send current state
+shelli send myshell "ls -la\n"          # command with explicit newline
+shelli send pyrepl "print('hi')\n"      # to Python with newline
+shelli send myshell "\x03"              # Ctrl+C (interrupt)
+shelli send myshell "\x04"              # Ctrl+D (EOF)
+shelli send myshell "y"                 # 'y' without newline
+shelli send tui "hello" "\r"            # TUI: type "hello", then Enter (separate writes)
 ```
 
 ### read - Read session output
@@ -450,46 +453,40 @@ Some TUI apps use line-based input/output and work with shelli, but may need spe
 
 **Example: OpenClaw TUI**
 
-OpenClaw TUI (`openclaw tui`) is a chat interface for AI agents. It works with shelli but requires a **two-step submit pattern**:
+OpenClaw TUI (`openclaw tui`) is a chat interface for AI agents. It works with shelli by sending message and Enter as separate writes:
 
 ```bash
 # Step 1: Create SSH session and launch TUI
 shelli create openclaw --cmd "ssh user@host"
 shelli read openclaw --settle 3000
-shelli send openclaw "openclaw tui"
+shelli send openclaw "openclaw tui\n"
 shelli read openclaw --settle 3000
 
-# Step 2: Send message (goes to input field, NOT submitted yet)
-shelli send openclaw "Hello, this is my message"
+# Step 2: Send message then Enter as separate writes
+shelli send openclaw "Hello, this is my message" "\r"
 
-# Step 3: Submit with raw carriage return (CRITICAL!)
-shelli send openclaw "\r" --raw
-
-# Step 4: Wait for response
+# Step 3: Wait for response
 sleep 8  # Allow time for AI to respond
 shelli read openclaw --strip-ansi
 ```
 
-**Why two steps?**
+**Why separate writes?**
 
-1. `shelli send` with a message adds a newline, which goes into the TUI's input buffer
-2. The TUI doesn't auto-submit on newline - it waits for explicit submit
-3. Sending raw `\r` (carriage return) triggers the submit action
-
-**Common mistake:** Using `shelli exec` (which auto-adds newline) does NOT submit in the TUI. The message appears in the input field but never gets sent.
+TUI apps often buffer input and only submit when Enter is pressed as a separate keypress event. By using multiple arguments:
+1. First arg sends your text
+2. Second arg `"\r"` sends carriage return as a separate write, triggering submit
 
 **Pattern for TUIs with input buffers:**
 ```bash
-# Type into input field
-shelli send session "your message here"
-# Submit (try these in order until one works)
-shelli send session "\r" --raw       # Carriage return
-shelli send session "\n" --raw       # Newline
-shelli send session "\x1b\r" --raw   # Alt+Enter (ESC + CR)
+# Message then Enter as separate writes
+shelli send session "your message" "\r"
+
+# If \r doesn't work, try \n
+shelli send session "your message" "\n"
 ```
 
 **Debugging TUI issues:**
 1. Read all output: `shelli read session --all --strip-ansi`
 2. Look for status lines showing "idle" or "connected"
 3. Check if your message appears in input area vs chat history
-4. If stuck, try Ctrl+C: `shelli send session "\x03" --raw`
+4. If stuck, try Ctrl+C: `shelli send session "\x03"`

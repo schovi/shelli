@@ -144,23 +144,24 @@ shelli exec db "SELECT 1;" --strip-ansi --json     # clean JSON output
 
 ### send
 
-Send input to a session. Appends newline by default.
+Send raw input to a session. Low-level command for precise control.
 
 ```bash
-shelli send <name> <input> [--raw]
+shelli send <name> <input> [input...]
 ```
 
-**Normal mode** (default): Appends newline, sends as-is.
-
-**Raw mode** (`--raw`): No newline, interprets escape sequences.
+- Each argument is sent as a separate write to the PTY
+- Escape sequences are always interpreted
+- No newline is added automatically
 
 Examples:
 ```bash
-shelli send myshell "ls -la"           # send command + newline
-shelli send pyrepl "print('hello')"    # send to Python + newline
-shelli send myshell "\x03" --raw       # send Ctrl+C
-shelli send myshell "\x04" --raw       # send Ctrl+D (EOF)
-shelli send myshell "y" --raw          # send 'y' without newline
+shelli send myshell "ls -la\n"          # command with explicit newline
+shelli send tui "hello" "\r"            # TUI: type "hello", then Enter (separate writes)
+shelli send tui "hello\r"               # TUI: same but single write
+shelli send myshell "\x03"              # send Ctrl+C
+shelli send myshell "\x04"              # send Ctrl+D (EOF)
+shelli send myshell "y"                 # send 'y' without newline
 ```
 
 ### read
