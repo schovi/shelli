@@ -210,6 +210,10 @@ shelli read <name> [flags]
 - (default) - New output since last read
 - `--all` - All output from session start
 
+**Streaming mode**:
+- `--follow` / `-f` - Continuous output like `tail -f` (great for TUIs)
+- `--follow-ms N` - Poll interval in milliseconds (default: 100)
+
 **Blocking modes** (returns new output):
 - `--wait "pattern"` - Wait for regex pattern match
 - `--settle N` - Wait for N ms of silence
@@ -488,20 +492,27 @@ shelli kill py
 
 ### TUI Applications
 
-shelli does **not** support full-screen TUI applications like `k9s`, `btop`, `htop`, `vim`, `nano`, etc.
+shelli now supports TUI applications using `--follow` mode:
 
-These apps paint 2D screens using cursor positioning, not line-based output.
+```bash
+shelli create tui --cmd "btop"
+shelli read tui --follow          # streams output continuously
+```
 
-**Workarounds:**
-- `k9s` → `kubectl get pods`, `kubectl describe pod`
-- `btop`/`htop` → `ps aux`, `top -bn1`
-- `vim` → `sed`, `awk`, or direct file manipulation
+**What works:**
+- System monitors: `btop`, `htop`, `k9s`
+- Most TUIs that use standard terminal escape sequences
+- Resize with `shelli resize` updates the TUI layout
+
+**Limited support:**
+- Text editors (`vim`, `nano`) - display works but interaction is impractical
+- Apps with complex mouse/input handling may behave unexpectedly
 
 **shelli works best with:**
 - REPLs (Python, Node, Ruby, etc.)
 - Database CLIs (psql, mysql, sqlite3)
 - SSH sessions
-- Any tool that produces line-based text output
+- TUI monitors and dashboards (with `--follow`)
 
 ## Development
 

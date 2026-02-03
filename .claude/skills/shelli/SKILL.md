@@ -143,6 +143,10 @@ shelli read <name> [flags]
 - (default): New output since last read
 - `--all`: All output from session start
 
+**Streaming mode** (for TUIs):
+- `--follow` / `-f`: Continuous output like `tail -f`
+- `--follow-ms N`: Poll interval in ms (default: 100)
+
 **Blocking modes**:
 - `--wait "pattern"`: Wait for regex pattern match
 - `--settle N`: Wait for N ms of silence
@@ -156,6 +160,7 @@ Examples:
 ```bash
 shelli read myshell                    # new output, instant
 shelli read myshell --all              # all output, instant
+shelli read myshell --follow           # stream continuously (Ctrl+C to stop)
 shelli read pyrepl --wait ">>>"        # wait for Python prompt
 shelli read myshell --settle 300       # wait for 300ms silence
 shelli read myshell --strip-ansi       # clean output
@@ -530,20 +535,27 @@ shelli create session --cmd "command"
 
 ## Limitations
 
-### Full-Screen TUI Applications Not Supported
+### TUI Applications - Now Supported
 
-shelli does NOT work well with full-screen TUI apps that paint 2D screens:
-- Text editors: vim, nano, emacs
-- System monitors: htop, btop, top (interactive mode)
-- File managers: ranger, mc
-- Kubernetes: k9s, lazydocker
+shelli supports TUI applications using `--follow` mode for continuous streaming:
 
-These apps use cursor positioning and screen painting. Use their CLI alternatives:
-- `vim` → `sed`, `awk`, or file operations
-- `htop` → `ps aux`, `top -bn1`
-- `k9s` → `kubectl get pods`, `kubectl describe pod`
+```bash
+shelli create mon --cmd "btop"
+shelli read mon --follow              # streams output, renders TUI
+shelli resize mon --cols 150 --rows 50  # resize works too
+```
 
-### Line-Based TUI Applications CAN Work
+**What works well:**
+- System monitors: `btop`, `htop`, `k9s`
+- Dashboards and status displays
+- Most TUIs using standard terminal escape sequences
+
+**Limited support:**
+- Text editors (`vim`, `nano`) - display works but interaction is impractical
+- Apps with complex mouse handling may behave unexpectedly
+- Some apps may not respond to resize signals
+
+### Line-Based TUI Applications
 
 Some TUI apps use line-based input/output and work with shelli, but may need special handling:
 
