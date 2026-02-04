@@ -122,6 +122,7 @@ Flags:
 - `--cwd /path` - Set working directory
 - `--cols N` - Terminal columns (default: 80)
 - `--rows N` - Terminal rows (default: 24)
+- `--tui` - Enable TUI mode (auto-truncate buffer on screen clear)
 - `--json` - Output as JSON
 
 Examples:
@@ -132,6 +133,7 @@ shelli create db --cmd "psql -d mydb"        # PostgreSQL
 shelli create server --cmd "ssh user@host"   # SSH session
 shelli create dev --env "DEBUG=1" --cwd /app # with env and cwd
 shelli create wide --cols 200 --rows 50      # large terminal
+shelli create vim --cmd "vim" --tui          # TUI mode for editors
 ```
 
 ### exec
@@ -492,12 +494,25 @@ shelli kill py
 
 ### TUI Applications
 
-shelli now supports TUI applications using `--follow` mode:
+shelli supports TUI applications using `--follow` mode and `--tui` mode for buffer management:
 
 ```bash
-shelli create tui --cmd "btop"
-shelli read tui --follow          # streams output continuously
+shelli create mon --cmd "btop" --tui   # TUI mode auto-truncates buffer
+shelli read mon --follow               # streams output continuously
 ```
+
+**TUI Mode (`--tui` flag):**
+
+When enabled, shelli uses multiple detection strategies to identify frame boundaries and truncate old content:
+
+| Strategy | Trigger | Apps |
+|----------|---------|------|
+| Screen clear | ESC[2J, ESC[?1049h, ESC c | vim, less, nano |
+| Sync mode | ESC[?2026h (begin) | Claude Code, modern terminals |
+| Cursor home | ESC[1;1H (with reset) | k9s, btm, htop |
+| Size cap | Buffer > 100KB | Fallback for all |
+
+This reduces storage from ~50MB to ~2KB for typical TUI sessions.
 
 **What works:**
 - System monitors: `btop`, `htop`, `k9s`
@@ -512,7 +527,7 @@ shelli read tui --follow          # streams output continuously
 - REPLs (Python, Node, Ruby, etc.)
 - Database CLIs (psql, mysql, sqlite3)
 - SSH sessions
-- TUI monitors and dashboards (with `--follow`)
+- TUI monitors and dashboards (with `--follow` and `--tui`)
 
 ## Development
 

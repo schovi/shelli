@@ -45,7 +45,9 @@ shelli provides persistent interactive shell sessions via PTY-backed processes m
 
 **Utilities** (`internal/`)
 - `wait/`: Output polling with settle-time and pattern-matching modes
-- `ansi/`: ANSI escape code stripping
+- `ansi/`: ANSI escape code stripping and TUI frame detection
+  - `strip.go`: ANSI escape code removal
+  - `clear.go`: `FrameDetector` for TUI mode (screen clear, sync mode, cursor home, size cap)
 - `escape/`: Escape sequence interpretation for raw mode
 
 ### Data Flow
@@ -68,6 +70,7 @@ CLI/MCP → daemon.Client → Unix socket → daemon.Server → PTY → subproce
 - **Stop vs Kill**: `stop` terminates process but keeps output accessible; `kill` deletes everything
 - **Session states**: Sessions can be "running" or "stopped" with timestamp tracking
 - **TTL cleanup**: Optional auto-deletion of stopped sessions via `--stopped-ttl`
+- **TUI mode**: `--tui` flag enables frame detection with multiple strategies (screen clear, sync mode, cursor home, size cap) to auto-truncate buffer for TUI apps
 
 ## Claude Plugin
 
@@ -82,7 +85,7 @@ Skills in `.claude/skills/`:
 - **Linting**: `.golangci.yml` - golangci-lint config with gosec, gocritic, revive
 - **CI/CD**: `.github/workflows/ci.yml` - lint, test, build, security on push/PR
 - **Releases**: `.goreleaser.yml` - multi-platform binaries, Homebrew tap update on tags
-- **Tests**: `internal/ansi/strip_test.go`, `internal/wait/wait_test.go`, `internal/daemon/limitlines_test.go`
+- **Tests**: `internal/ansi/strip_test.go`, `internal/ansi/clear_test.go`, `internal/wait/wait_test.go`, `internal/daemon/limitlines_test.go`
 - **Version**: `shelli version` - build info injected by goreleaser
 
 ## Documentation Sync Rules

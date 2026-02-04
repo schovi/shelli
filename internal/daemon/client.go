@@ -56,6 +56,7 @@ type CreateOptions struct {
 	Cwd     string
 	Cols    int
 	Rows    int
+	TUIMode bool
 }
 
 func (c *Client) Create(name string, opts CreateOptions) (map[string]interface{}, error) {
@@ -71,6 +72,7 @@ func (c *Client) Create(name string, opts CreateOptions) (map[string]interface{}
 		Cwd:     opts.Cwd,
 		Cols:    opts.Cols,
 		Rows:    opts.Rows,
+		TUIMode: opts.TUIMode,
 	})
 	if err != nil {
 		return nil, err

@@ -19,6 +19,7 @@ type SessionMeta struct {
 	ReadPos   int64        `json:"read_pos"`
 	Cols      int          `json:"cols"`
 	Rows      int          `json:"rows"`
+	TUIMode   bool         `json:"tui_mode,omitempty"`
 }
 
 type OutputStorage interface {

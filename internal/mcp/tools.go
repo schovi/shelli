@@ -55,6 +55,10 @@ func (r *ToolRegistry) List() []ToolDef {
 						"type":        "integer",
 						"description": "Terminal rows (default: 24)",
 					},
+					"tui": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Enable TUI mode for apps like vim, htop. Auto-truncates buffer on screen clear to reduce storage.",
+					},
 				},
 				"required": []string{"name"},
 			},
@@ -329,6 +333,7 @@ type CreateArgs struct {
 	Cwd     string   `json:"cwd"`
 	Cols    int      `json:"cols"`
 	Rows    int      `json:"rows"`
+	TUI     bool     `json:"tui"`
 }
 
 func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error) {
@@ -343,6 +348,7 @@ func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error)
 		Cwd:     a.Cwd,
 		Cols:    a.Cols,
 		Rows:    a.Rows,
+		TUIMode: a.TUI,
 	})
 	if err != nil {
 		return nil, err
