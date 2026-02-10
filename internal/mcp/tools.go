@@ -57,7 +57,7 @@ func (r *ToolRegistry) List() []ToolDef {
 					},
 					"tui": map[string]interface{}{
 						"type":        "boolean",
-						"description": "Enable TUI mode for apps like vim, htop. Auto-truncates buffer on screen clear to reduce storage.",
+						"description": "Enable TUI mode for apps like vim, htop. Auto-truncates buffer on frame boundaries to reduce storage.",
 					},
 				},
 				"required": []string{"name"},

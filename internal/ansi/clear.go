@@ -3,7 +3,7 @@ package ansi
 // TruncationStrategy defines which detection methods are enabled for TUI mode.
 type TruncationStrategy struct {
 	ScreenClear bool // ESC[2J, ESC[?1049h, ESC c
-	SyncMode    bool // ESC[?2026l (sync end)
+	SyncMode    bool // ESC[?2026h (sync begin)
 	CursorHome  bool // ESC[1;1H with heuristics
 	MaxSize     int  // Size cap in bytes (0 = disabled)
 }
@@ -23,9 +23,10 @@ func DefaultTUIStrategy() TruncationStrategy {
 type FrameDetector struct {
 	strategy            TruncationStrategy
 	pending             []byte
-	bufferSize          int  // track accumulated size for MaxSize check
-	bytesSinceLastFrame int  // bytes processed since last frame boundary (-1 = never seen)
-	seenFrame           bool // true if we've ever seen a frame boundary
+	heuristicTrail      []byte // trailing bytes from previous chunk for cross-chunk cursor-home lookback
+	bufferSize          int    // track accumulated size for MaxSize check
+	bytesSinceLastFrame int    // bytes processed since last frame boundary (-1 = never seen)
+	seenFrame           bool   // true if we've ever seen a frame boundary
 }
 
 // DetectResult contains the result of processing a chunk.
@@ -67,10 +68,8 @@ var cursorHomeHeuristics = [][]byte{
 }
 
 const (
-	maxSequenceLen       = 8
-	cursorHomeLookback   = 20
-	sizeTruncateKeepLast = 50 * 1024 // keep last 50KB on size cap
-	frameRecencyWindow   = 50 * 1024 // only apply size cap if frame seen within last 50KB
+	maxSequenceLen     = 8
+	cursorHomeLookback = 20
 )
 
 // Process analyzes a chunk and returns whether truncation should occur
@@ -131,8 +130,17 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 		data = data[:pendingStart]
 	}
 
+	// Save trailing bytes for cross-chunk cursor-home lookback (after scan loop used old trail)
+	if len(data) >= cursorHomeLookback {
+		d.heuristicTrail = make([]byte, cursorHomeLookback)
+		copy(d.heuristicTrail, data[len(data)-cursorHomeLookback:])
+	} else if len(data) > 0 {
+		d.heuristicTrail = make([]byte, len(data))
+		copy(d.heuristicTrail, data)
+	}
+
 	// Check for recent frame BEFORE updating (to catch size cap before recency expires)
-	hadRecentFrame := d.seenFrame && d.bytesSinceLastFrame < frameRecencyWindow
+	hadRecentFrame := d.seenFrame && d.bytesSinceLastFrame < d.frameRecencyWindow()
 
 	// Update buffer size tracking and frame recency
 	if lastTruncEnd == -1 {
@@ -148,16 +156,11 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 	// This prevents breaking hybrid TUI apps (btm, etc.) that send frames once at startup
 	// then switch to incremental updates
 	if d.strategy.MaxSize > 0 && hadRecentFrame && d.bufferSize > d.strategy.MaxSize {
-		// Size cap triggered - truncate to keep only last portion
-		keepSize := sizeTruncateKeepLast
-		if keepSize > len(data) {
-			keepSize = len(data)
-		}
-		dataAfter := data[len(data)-keepSize:]
-		d.bufferSize = keepSize
+		d.bufferSize = len(data)
+		d.bytesSinceLastFrame = len(data)
 		return DetectResult{
 			Truncate:  true,
-			DataAfter: dataAfter,
+			DataAfter: data,
 		}
 	}
 
@@ -192,9 +195,26 @@ func (d *FrameDetector) strategyEnabled(strategy string) bool {
 
 // checkCursorHomeHeuristic returns true if cursor home should trigger truncation.
 // Only triggers if preceded by reset or hide cursor within lookback window.
+// Uses heuristicTrail from the previous chunk when the lookback window extends
+// beyond the start of the current data.
 func (d *FrameDetector) checkCursorHomeHeuristic(data []byte, pos int) bool {
-	start := max(0, pos-cursorHomeLookback)
-	window := data[start:pos]
+	var window []byte
+	switch {
+	case pos >= cursorHomeLookback:
+		window = data[pos-cursorHomeLookback : pos]
+	case len(d.heuristicTrail) > 0:
+		// Extend lookback into previous chunk's trailing bytes
+		need := cursorHomeLookback - pos
+		trail := d.heuristicTrail
+		if need > len(trail) {
+			need = len(trail)
+		}
+		window = make([]byte, need+pos)
+		copy(window, trail[len(trail)-need:])
+		copy(window[need:], data[:pos])
+	default:
+		window = data[:pos]
+	}
 
 	for _, heuristic := range cursorHomeHeuristics {
 		for i := 0; i <= len(window)-len(heuristic); i++ {
@@ -219,7 +239,13 @@ func (d *FrameDetector) BufferSize() int {
 // HasRecentFrame returns true if a frame boundary was detected recently
 // (within the last frameRecencyWindow bytes).
 func (d *FrameDetector) HasRecentFrame() bool {
-	return d.seenFrame && d.bytesSinceLastFrame < frameRecencyWindow
+	return d.seenFrame && d.bytesSinceLastFrame < d.frameRecencyWindow()
+}
+
+// frameRecencyWindow returns MaxSize * 2, ensuring the recency window is always
+// large enough for size-cap to fire before recency expires.
+func (d *FrameDetector) frameRecencyWindow() int {
+	return d.strategy.MaxSize * 2
 }
 
 // BytesSinceLastFrame returns bytes processed since the last frame boundary.

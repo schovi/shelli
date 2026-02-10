@@ -122,7 +122,7 @@ Flags:
 - `--cwd /path` - Set working directory
 - `--cols N` - Terminal columns (default: 80)
 - `--rows N` - Terminal rows (default: 24)
-- `--tui` - Enable TUI mode (auto-truncate buffer on screen clear)
+- `--tui` - Enable TUI mode (auto-truncate buffer on frame boundaries)
 - `--json` - Output as JSON
 
 Examples:
@@ -510,7 +510,7 @@ When enabled, shelli uses multiple detection strategies to identify frame bounda
 | Screen clear | ESC[2J, ESC[?1049h, ESC c | vim, less, nano |
 | Sync mode | ESC[?2026h (begin) | Claude Code, modern terminals |
 | Cursor home | ESC[1;1H (with reset) | k9s, btm, htop |
-| Size cap | Buffer > 100KB | Fallback for all |
+| Size cap | Buffer > 100KB after frame | Fallback after frame detection |
 
 This reduces storage from ~50MB to ~2KB for typical TUI sessions.
 

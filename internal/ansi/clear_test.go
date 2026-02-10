@@ -456,12 +456,12 @@ func TestFrameDetector_AdaptiveTUI(t *testing.T) {
 			t.Error("HasRecentFrame should be true after frame")
 		}
 
-		// Send 60KB of incremental updates (exceeds 50KB recency window)
-		chunk := make([]byte, 60*1024)
+		// Send 210KB of incremental updates (exceeds 200KB recency window = MaxSize*2)
+		chunk := make([]byte, 210*1024)
 		d.Process(chunk)
 
 		if d.HasRecentFrame() {
-			t.Error("HasRecentFrame should be false after 60KB without frames")
+			t.Error("HasRecentFrame should be false after 210KB without frames")
 		}
 
 		// Now size cap should NOT apply even though buffer exceeds MaxSize
@@ -686,4 +686,121 @@ func TestFrameDetector_RealWorldClaudeCode(t *testing.T) {
 	if !bytes.Equal(lastData, []byte("\x1b[?2026l")) {
 		t.Errorf("lastData = %q, want %q", lastData, "\x1b[?2026l")
 	}
+}
+
+func TestFrameDetector_SizeCapWith4KBChunks(t *testing.T) {
+	d := NewFrameDetector(DefaultTUIStrategy())
+
+	// Send a frame boundary first
+	result := d.Process([]byte("\x1b[2Jframe"))
+	if !result.Truncate {
+		t.Fatal("expected truncation on screen clear")
+	}
+
+	// Send ~30 x 4KB chunks (120KB total, exceeds 100KB MaxSize)
+	// With recency window = MaxSize*2 = 200KB, the frame is still recent
+	truncated := false
+	for i := 0; i < 30; i++ {
+		chunk := make([]byte, 4*1024)
+		result := d.Process(chunk)
+		if result.Truncate {
+			truncated = true
+			break
+		}
+	}
+
+	if !truncated {
+		t.Error("size cap should fire with default settings and 4KB chunks")
+	}
+}
+
+func TestFrameDetector_RepeatedGrowthStaysBounded(t *testing.T) {
+	d := NewFrameDetector(DefaultTUIStrategy())
+
+	// Send initial frame
+	d.Process([]byte("\x1b[2Jstart"))
+
+	// First growth cycle: exceed MaxSize (100KB)
+	firstCapFired := false
+	for i := 0; i < 30; i++ {
+		result := d.Process(make([]byte, 4*1024))
+		if result.Truncate {
+			firstCapFired = true
+			break
+		}
+	}
+	if !firstCapFired {
+		t.Fatal("first size cap should have fired")
+	}
+
+	// Second growth cycle: after re-anchoring, cap should fire again
+	secondCapFired := false
+	for i := 0; i < 30; i++ {
+		result := d.Process(make([]byte, 4*1024))
+		if result.Truncate {
+			secondCapFired = true
+			break
+		}
+	}
+	if !secondCapFired {
+		t.Error("second size cap should fire after re-anchoring")
+	}
+}
+
+func TestFrameDetector_CrossChunkCursorHomeHeuristic(t *testing.T) {
+	t.Run("reset at end of chunk 1, cursor home at start of chunk 2", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		// Chunk 1 ends with ESC[0m (reset)
+		result := d.Process([]byte("old content\x1b[0m"))
+		if result.Truncate {
+			t.Error("chunk 1 should not truncate")
+		}
+
+		// Chunk 2 starts with ESC[1;1H (cursor home)
+		result = d.Process([]byte("\x1b[1;1Hnew content"))
+		if !result.Truncate {
+			t.Error("chunk 2 should truncate (cross-chunk heuristic)")
+		}
+		if !bytes.Equal(result.DataAfter, []byte("new content")) {
+			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "new content")
+		}
+	})
+
+	t.Run("hide cursor at end of chunk 1, cursor home at start of chunk 2", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		// Chunk 1 ends with ESC[?25l (hide cursor)
+		result := d.Process([]byte("old content\x1b[?25l"))
+		if result.Truncate {
+			t.Error("chunk 1 should not truncate")
+		}
+
+		// Chunk 2 starts with ESC[1;1H (cursor home)
+		result = d.Process([]byte("\x1b[1;1Hnew content"))
+		if !result.Truncate {
+			t.Error("chunk 2 should truncate (cross-chunk heuristic)")
+		}
+	})
+
+	t.Run("heuristic marker too far back in previous chunk", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		// Chunk 1: reset followed by >20 bytes of padding
+		padding := make([]byte, 25)
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		chunk1 := append([]byte("old\x1b[0m"), padding...)
+		result := d.Process(chunk1)
+		if result.Truncate {
+			t.Error("chunk 1 should not truncate")
+		}
+
+		// Chunk 2: cursor home at start - heuristic marker is >20 bytes back, should NOT trigger
+		result = d.Process([]byte("\x1b[1;1Hnew content"))
+		if result.Truncate {
+			t.Error("should NOT truncate when heuristic marker is beyond lookback window")
+		}
+	})
 }

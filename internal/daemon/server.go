@@ -395,7 +395,16 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	s.mu.Lock()
 	done := s.doneChans[name]
 	detector := s.frameDetectors[name]
+	storage := s.storage
 	s.mu.Unlock()
+
+	if detector != nil {
+		defer func() {
+			if pending := detector.Flush(); len(pending) > 0 {
+				storage.Append(name, pending)
+			}
+		}()
+	}
 
 	buf := make([]byte, ReadBufferSize)
 	for {

@@ -51,6 +51,10 @@ func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
 			lastChangeTime = time.Now()
 		}
 
+		if pos < cfg.StartPosition {
+			cfg.StartPosition = 0
+		}
+
 		newOutput := ""
 		if pos > cfg.StartPosition {
 			startIdx := cfg.StartPosition
@@ -72,6 +76,9 @@ func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
 	}
 
 	output, pos, _ := readFn()
+	if pos < cfg.StartPosition {
+		cfg.StartPosition = 0
+	}
 	newOutput := ""
 	if pos > cfg.StartPosition {
 		startIdx := cfg.StartPosition
