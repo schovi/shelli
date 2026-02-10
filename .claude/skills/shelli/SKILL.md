@@ -549,7 +549,16 @@ shelli resize mon --cols 150 --rows 50  # resize works too
 
 **TUI Mode (`--tui` flag):**
 
-When enabled, shelli detects screen clear sequences (ESC[2J, ESC[?1049h, ESC c) and truncates all previous buffer content. This reduces storage from ~50MB to ~2KB for typical TUI sessions.
+When enabled, shelli uses multiple detection strategies to identify frame boundaries:
+
+| Strategy | Trigger | Coverage |
+|----------|---------|----------|
+| Screen clear | ESC[2J, ESC[?1049h, ESC c | vim, less, nano |
+| Sync mode | ESC[?2026h (begin) | Claude Code, modern terminals |
+| Cursor home | ESC[1;1H (with reset) | k9s, btm, htop |
+| Size cap | Buffer > 100KB | Fallback for all |
+
+This reduces storage from ~50MB to ~2KB for typical TUI sessions.
 
 Use `--tui` for apps that frequently redraw the screen (vim, htop, btop, k9s). Do not use for apps where you need to preserve scrollback history.
 

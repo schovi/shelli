@@ -132,8 +132,8 @@ func TestScreenClearDetector(t *testing.T) {
 			for i, chunk := range tt.chunks {
 				result := d.Process(chunk)
 
-				if result.ClearFound != tt.wantClears[i] {
-					t.Errorf("chunk %d: ClearFound = %v, want %v", i, result.ClearFound, tt.wantClears[i])
+				if result.Truncate != tt.wantClears[i] {
+					t.Errorf("chunk %d: Truncate = %v, want %v", i, result.Truncate, tt.wantClears[i])
 				}
 
 				if !bytes.Equal(result.DataAfter, tt.wantData[i]) {
@@ -149,7 +149,7 @@ func TestScreenClearDetector_Flush(t *testing.T) {
 
 	// Send chunk ending with partial escape sequence
 	result := d.Process([]byte("data\x1b"))
-	if result.ClearFound {
+	if result.Truncate {
 		t.Error("expected no clear")
 	}
 	if !bytes.Equal(result.DataAfter, []byte("data")) {
@@ -187,7 +187,7 @@ func TestScreenClearDetector_RealWorldVim(t *testing.T) {
 
 	for _, chunk := range chunks {
 		result := d.Process(chunk)
-		if result.ClearFound {
+		if result.Truncate {
 			totalClears++
 		}
 		lastData = result.DataAfter
@@ -201,5 +201,489 @@ func TestScreenClearDetector_RealWorldVim(t *testing.T) {
 	// Last data should be the file contents
 	if !bytes.Equal(lastData, []byte("file contents here\n")) {
 		t.Errorf("last data = %q, want %q", lastData, "file contents here\n")
+	}
+}
+
+func TestFrameDetector_SyncMode(t *testing.T) {
+	tests := []struct {
+		name       string
+		chunks     [][]byte
+		wantTrunc  []bool
+		wantData   [][]byte
+	}{
+		{
+			name:      "sync mode begin truncates (new frame starts)",
+			chunks:    [][]byte{[]byte("oldframe\x1b[?2026hnewframe")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("newframe")},
+		},
+		{
+			name:      "sync mode end does not truncate",
+			chunks:    [][]byte{[]byte("frame\x1b[?2026lafter")},
+			wantTrunc: []bool{false},
+			wantData:  [][]byte{[]byte("frame\x1b[?2026lafter")},
+		},
+		{
+			name:      "multiple sync frames - last begin wins",
+			chunks:    [][]byte{[]byte("\x1b[?2026hf1\x1b[?2026l\x1b[?2026hf2\x1b[?2026l")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("f2\x1b[?2026l")},
+		},
+		{
+			name: "cross-chunk sync mode begin",
+			chunks: [][]byte{
+				[]byte("old\x1b[?202"),
+				[]byte("6hnew"),
+			},
+			wantTrunc: []bool{false, true},
+			wantData:  [][]byte{[]byte("old"), []byte("new")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewFrameDetector(TruncationStrategy{
+				SyncMode: true,
+			})
+
+			for i, chunk := range tt.chunks {
+				result := d.Process(chunk)
+
+				if result.Truncate != tt.wantTrunc[i] {
+					t.Errorf("chunk %d: Truncate = %v, want %v", i, result.Truncate, tt.wantTrunc[i])
+				}
+
+				if !bytes.Equal(result.DataAfter, tt.wantData[i]) {
+					t.Errorf("chunk %d: DataAfter = %q, want %q", i, result.DataAfter, tt.wantData[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFrameDetector_CursorHome(t *testing.T) {
+	tests := []struct {
+		name       string
+		chunks     [][]byte
+		wantTrunc  []bool
+		wantData   [][]byte
+	}{
+		{
+			name:      "cursor home with reset truncates",
+			chunks:    [][]byte{[]byte("old\x1b[0m\x1b[1;1Hnew")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("new")},
+		},
+		{
+			name:      "cursor home with short reset truncates",
+			chunks:    [][]byte{[]byte("old\x1b[m\x1b[1;1Hnew")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("new")},
+		},
+		{
+			name:      "cursor home with hide cursor truncates",
+			chunks:    [][]byte{[]byte("old\x1b[?25l\x1b[1;1Hnew")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("new")},
+		},
+		{
+			name:      "cursor home without heuristic does not truncate",
+			chunks:    [][]byte{[]byte("old\x1b[1;1Hnew")},
+			wantTrunc: []bool{false},
+			wantData:  [][]byte{[]byte("old\x1b[1;1Hnew")},
+		},
+		{
+			name:      "short cursor home with reset truncates",
+			chunks:    [][]byte{[]byte("old\x1b[0m\x1b[Hnew")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("new")},
+		},
+		{
+			name:      "short cursor home without heuristic does not truncate",
+			chunks:    [][]byte{[]byte("old\x1b[Hnew")},
+			wantTrunc: []bool{false},
+			wantData:  [][]byte{[]byte("old\x1b[Hnew")},
+		},
+		{
+			name:      "heuristic too far away does not truncate",
+			chunks:    [][]byte{[]byte("old\x1b[0m" + string(make([]byte, 25)) + "\x1b[1;1Hnew")},
+			wantTrunc: []bool{false},
+			wantData:  [][]byte{[]byte("old\x1b[0m" + string(make([]byte, 25)) + "\x1b[1;1Hnew")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewFrameDetector(TruncationStrategy{
+				CursorHome: true,
+			})
+
+			for i, chunk := range tt.chunks {
+				result := d.Process(chunk)
+
+				if result.Truncate != tt.wantTrunc[i] {
+					t.Errorf("chunk %d: Truncate = %v, want %v", i, result.Truncate, tt.wantTrunc[i])
+				}
+
+				if !bytes.Equal(result.DataAfter, tt.wantData[i]) {
+					t.Errorf("chunk %d: DataAfter = %q, want %q", i, result.DataAfter, tt.wantData[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFrameDetector_SizeCap(t *testing.T) {
+	tests := []struct {
+		name          string
+		maxSize       int
+		strategy      TruncationStrategy
+		chunks        [][]byte
+		wantTrunc     []bool
+		wantMaxLen    []int // max length of DataAfter
+	}{
+		{
+			name:       "under cap no truncation",
+			maxSize:    1000,
+			strategy:   TruncationStrategy{ScreenClear: true, MaxSize: 1000},
+			chunks:     [][]byte{[]byte("\x1b[2Jhello world")},
+			wantTrunc:  []bool{true},
+			wantMaxLen: []int{100},
+		},
+		{
+			name:     "exceeds cap truncates after frame boundary",
+			maxSize:  50,
+			strategy: TruncationStrategy{ScreenClear: true, MaxSize: 50},
+			chunks:   [][]byte{[]byte("\x1b[2J"), make([]byte, 100)},
+			wantTrunc:  []bool{true, true},
+			wantMaxLen: []int{0, 100},
+		},
+		{
+			name:     "accumulated size triggers cap after frame",
+			maxSize:  50,
+			strategy: TruncationStrategy{ScreenClear: true, MaxSize: 50},
+			chunks:   [][]byte{[]byte("\x1b[2J"), make([]byte, 30), make([]byte, 30)},
+			wantTrunc:  []bool{true, false, true},
+			wantMaxLen: []int{0, 30, 30},
+		},
+		{
+			name:       "disabled cap (0) never truncates on size",
+			maxSize:    0,
+			strategy:   TruncationStrategy{MaxSize: 0},
+			chunks:     [][]byte{make([]byte, 1000)},
+			wantTrunc:  []bool{false},
+			wantMaxLen: []int{1000},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewFrameDetector(tt.strategy)
+
+			for i, chunk := range tt.chunks {
+				result := d.Process(chunk)
+
+				if result.Truncate != tt.wantTrunc[i] {
+					t.Errorf("chunk %d: Truncate = %v, want %v", i, result.Truncate, tt.wantTrunc[i])
+				}
+
+				if len(result.DataAfter) > tt.wantMaxLen[i] {
+					t.Errorf("chunk %d: DataAfter len = %d, want <= %d", i, len(result.DataAfter), tt.wantMaxLen[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFrameDetector_AdaptiveTUI(t *testing.T) {
+	t.Run("incremental app without frame boundaries - no size cap truncation", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+
+		// Simulate incremental TUI: positional updates only, no frame sequences
+		chunks := [][]byte{
+			[]byte("initial full screen draw\n"),
+			[]byte("\x1b[5;10Hupdate cell"),  // positional update (row 5, col 10)
+			[]byte("\x1b[10;20Hanother cell"), // another positional update
+		}
+
+		// Send lots of data to exceed size cap
+		bigChunk := make([]byte, 150*1024) // 150KB, exceeds 100KB cap
+		for i := range bigChunk {
+			bigChunk[i] = 'x'
+		}
+		chunks = append(chunks, bigChunk)
+
+		for i, chunk := range chunks {
+			result := d.Process(chunk)
+			if result.Truncate {
+				t.Errorf("chunk %d: unexpected truncation for incremental app", i)
+			}
+		}
+
+		if d.HasRecentFrame() {
+			t.Error("HasRecentFrame should be false for app with no frames")
+		}
+	})
+
+	t.Run("full-redraw app with frame boundaries - size cap works", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+
+		// First frame boundary
+		result := d.Process([]byte("\x1b[2Jframe content"))
+		if !result.Truncate {
+			t.Error("expected truncation on screen clear")
+		}
+
+		if !d.HasRecentFrame() {
+			t.Error("HasRecentFrame should be true after screen clear")
+		}
+
+		// Size cap should work because frame was recent
+		bigChunk := make([]byte, 150*1024)
+		result = d.Process(bigChunk)
+		if !result.Truncate {
+			t.Error("expected size cap truncation after recent frame")
+		}
+	})
+
+	t.Run("hybrid app - frame at startup then incremental - size cap disabled after threshold", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+
+		// App starts with frame boundary (like btm)
+		d.Process([]byte("\x1b[2Jinitial"))
+
+		if !d.HasRecentFrame() {
+			t.Error("HasRecentFrame should be true after frame")
+		}
+
+		// Send 60KB of incremental updates (exceeds 50KB recency window)
+		chunk := make([]byte, 60*1024)
+		d.Process(chunk)
+
+		if d.HasRecentFrame() {
+			t.Error("HasRecentFrame should be false after 60KB without frames")
+		}
+
+		// Now size cap should NOT apply even though buffer exceeds MaxSize
+		bigChunk := make([]byte, 150*1024)
+		result := d.Process(bigChunk)
+		if result.Truncate {
+			t.Error("size cap should NOT truncate when no recent frames")
+		}
+	})
+
+	t.Run("continuous frames - size cap applies", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+
+		// Simulate app that sends frames frequently (like vim, htop)
+		for i := 0; i < 5; i++ {
+			d.Process([]byte("\x1b[2Jframe"))
+			d.Process(make([]byte, 10*1024)) // 10KB between frames
+		}
+
+		if !d.HasRecentFrame() {
+			t.Error("HasRecentFrame should be true with frequent frames")
+		}
+
+		// Size cap should work
+		bigChunk := make([]byte, 150*1024)
+		result := d.Process(bigChunk)
+		if !result.Truncate {
+			t.Error("expected size cap truncation with recent frames")
+		}
+	})
+
+	t.Run("sync mode app - frame boundary detected on sync begin", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+
+		result := d.Process([]byte("old\x1b[?2026hnew"))
+		if !result.Truncate {
+			t.Error("expected truncation on sync begin")
+		}
+
+		if !d.HasRecentFrame() {
+			t.Error("HasRecentFrame should be true after sync begin")
+		}
+	})
+}
+
+func TestFrameDetector_Combined(t *testing.T) {
+	tests := []struct {
+		name      string
+		strategy  TruncationStrategy
+		chunks    [][]byte
+		wantTrunc []bool
+		wantData  [][]byte
+	}{
+		{
+			name:      "screen clear wins in same chunk",
+			strategy:  DefaultTUIStrategy(),
+			chunks:    [][]byte{[]byte("old\x1b[0m\x1b[1;1H\x1b[2Jnew")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("new")},
+		},
+		{
+			name:      "sync and screen clear - last wins",
+			strategy:  DefaultTUIStrategy(),
+			chunks:    [][]byte{[]byte("old\x1b[?2026h\x1b[2Jnew")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("new")},
+		},
+		{
+			name:      "all strategies combined",
+			strategy:  DefaultTUIStrategy(),
+			chunks:    [][]byte{[]byte("a\x1b[2Jb\x1b[?2026hc\x1b[0m\x1b[1;1Hd")},
+			wantTrunc: []bool{true},
+			wantData:  [][]byte{[]byte("d")},
+		},
+		{
+			name: "disabled screen clear",
+			strategy: TruncationStrategy{
+				ScreenClear: false,
+				SyncMode:    true,
+			},
+			chunks:    [][]byte{[]byte("old\x1b[2Jnew")},
+			wantTrunc: []bool{false},
+			wantData:  [][]byte{[]byte("old\x1b[2Jnew")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := NewFrameDetector(tt.strategy)
+
+			for i, chunk := range tt.chunks {
+				result := d.Process(chunk)
+
+				if result.Truncate != tt.wantTrunc[i] {
+					t.Errorf("chunk %d: Truncate = %v, want %v", i, result.Truncate, tt.wantTrunc[i])
+				}
+
+				if !bytes.Equal(result.DataAfter, tt.wantData[i]) {
+					t.Errorf("chunk %d: DataAfter = %q, want %q", i, result.DataAfter, tt.wantData[i])
+				}
+			}
+		})
+	}
+}
+
+func TestFrameDetector_BufferSize(t *testing.T) {
+	d := NewFrameDetector(TruncationStrategy{
+		ScreenClear: true,
+		MaxSize:     0,
+	})
+
+	// Initial buffer size is 0
+	if d.BufferSize() != 0 {
+		t.Errorf("initial BufferSize() = %d, want 0", d.BufferSize())
+	}
+
+	// Process some data
+	d.Process([]byte("hello"))
+	if d.BufferSize() != 5 {
+		t.Errorf("after 'hello': BufferSize() = %d, want 5", d.BufferSize())
+	}
+
+	// Process more data
+	d.Process([]byte(" world"))
+	if d.BufferSize() != 11 {
+		t.Errorf("after ' world': BufferSize() = %d, want 11", d.BufferSize())
+	}
+
+	// Clear resets size to data after clear
+	d.Process([]byte("\x1b[2Jnew"))
+	if d.BufferSize() != 3 {
+		t.Errorf("after clear: BufferSize() = %d, want 3", d.BufferSize())
+	}
+
+	// Reset buffer size
+	d.ResetBufferSize()
+	if d.BufferSize() != 0 {
+		t.Errorf("after reset: BufferSize() = %d, want 0", d.BufferSize())
+	}
+}
+
+func TestDefaultTUIStrategy(t *testing.T) {
+	s := DefaultTUIStrategy()
+
+	if !s.ScreenClear {
+		t.Error("ScreenClear should be enabled")
+	}
+	if !s.SyncMode {
+		t.Error("SyncMode should be enabled")
+	}
+	if !s.CursorHome {
+		t.Error("CursorHome should be enabled")
+	}
+	if s.MaxSize != 100*1024 {
+		t.Errorf("MaxSize = %d, want %d", s.MaxSize, 100*1024)
+	}
+}
+
+func TestFrameDetector_RealWorldK9s(t *testing.T) {
+	// k9s typically uses cursor home with reset for each frame
+	d := NewFrameDetector(DefaultTUIStrategy())
+
+	chunks := [][]byte{
+		[]byte("frame1 content\n"),
+		[]byte("\x1b[0m\x1b[1;1H"), // reset + cursor home
+		[]byte("frame2 content\n"),
+		[]byte("\x1b[0m\x1b[1;1H"), // reset + cursor home
+		[]byte("frame3 content\n"),
+	}
+
+	var lastData []byte
+	truncCount := 0
+
+	for _, chunk := range chunks {
+		result := d.Process(chunk)
+		if result.Truncate {
+			truncCount++
+		}
+		lastData = result.DataAfter
+	}
+
+	if truncCount != 2 {
+		t.Errorf("truncCount = %d, want 2", truncCount)
+	}
+
+	if !bytes.Equal(lastData, []byte("frame3 content\n")) {
+		t.Errorf("lastData = %q, want %q", lastData, "frame3 content\n")
+	}
+}
+
+func TestFrameDetector_RealWorldClaudeCode(t *testing.T) {
+	// Claude Code uses sync mode for updates
+	// Truncation happens on sync BEGIN (h), keeping the frame content
+	d := NewFrameDetector(DefaultTUIStrategy())
+
+	chunks := [][]byte{
+		[]byte("old"),
+		[]byte("\x1b[?2026h"), // sync start - truncate here (new frame)
+		[]byte("frame1"),
+		[]byte("\x1b[?2026l"), // sync end - no truncate
+		[]byte("\x1b[?2026h"), // sync start - truncate here (new frame)
+		[]byte("frame2"),
+		[]byte("\x1b[?2026l"), // sync end - no truncate
+	}
+
+	var lastData []byte
+	truncCount := 0
+
+	for _, chunk := range chunks {
+		result := d.Process(chunk)
+		if result.Truncate {
+			truncCount++
+		}
+		lastData = result.DataAfter
+	}
+
+	if truncCount != 2 {
+		t.Errorf("truncCount = %d, want 2", truncCount)
+	}
+
+	// Last data should be frame2 content plus the sync end
+	if !bytes.Equal(lastData, []byte("\x1b[?2026l")) {
+		t.Errorf("lastData = %q, want %q", lastData, "\x1b[?2026l")
 	}
 }

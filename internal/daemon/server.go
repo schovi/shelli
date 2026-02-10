@@ -41,7 +41,7 @@ type Server struct {
 	ptys           map[string]*os.File
 	cmds           map[string]*exec.Cmd
 	doneChans      map[string]chan struct{}
-	clearDetectors map[string]*ansi.ScreenClearDetector
+	frameDetectors map[string]*ansi.FrameDetector
 	socketDir      string
 	storage        OutputStorage
 	listener       net.Listener
@@ -89,7 +89,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		ptys:            make(map[string]*os.File),
 		cmds:            make(map[string]*exec.Cmd),
 		doneChans:       make(map[string]chan struct{}),
-		clearDetectors:  make(map[string]*ansi.ScreenClearDetector),
+		frameDetectors:  make(map[string]*ansi.FrameDetector),
 		socketDir:       socketDir,
 		storage:         NewMemoryStorage(DefaultMaxOutputSize),
 		cleanupStopChan: make(chan struct{}),
@@ -376,7 +376,7 @@ func (s *Server) handleCreate(req Request) Response {
 	s.cmds[req.Name] = cmd
 	s.doneChans[req.Name] = make(chan struct{})
 	if req.TUIMode {
-		s.clearDetectors[req.Name] = ansi.NewScreenClearDetector()
+		s.frameDetectors[req.Name] = ansi.NewFrameDetector(ansi.DefaultTUIStrategy())
 	}
 
 	go s.captureOutput(req.Name, ptmx, cmd)
@@ -394,7 +394,7 @@ func (s *Server) handleCreate(req Request) Response {
 func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	s.mu.Lock()
 	done := s.doneChans[name]
-	detector := s.clearDetectors[name]
+	detector := s.frameDetectors[name]
 	s.mu.Unlock()
 
 	buf := make([]byte, ReadBufferSize)
@@ -410,7 +410,7 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 		if n > 0 {
 			if detector != nil {
 				result := detector.Process(buf[:n])
-				if result.ClearFound {
+				if result.Truncate {
 					s.storage.Clear(name)
 				}
 				if len(result.DataAfter) > 0 {
@@ -434,7 +434,7 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	delete(s.ptys, name)
 	delete(s.cmds, name)
 	delete(s.doneChans, name)
-	delete(s.clearDetectors, name)
+	delete(s.frameDetectors, name)
 
 	if sess, ok := s.sessions[name]; ok {
 		sess.State = StateStopped
@@ -670,7 +670,7 @@ func (s *Server) handleKill(req Request) Response {
 
 	s.storage.Delete(req.Name)
 	delete(s.sessions, req.Name)
-	delete(s.clearDetectors, req.Name)
+	delete(s.frameDetectors, req.Name)
 
 	return Response{Success: true}
 }
