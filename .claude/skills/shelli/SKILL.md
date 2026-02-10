@@ -149,6 +149,11 @@ shelli read <name> [flags]
 - `--follow` / `-f`: Continuous output like `tail -f`
 - `--follow-ms N`: Poll interval in ms (default: 100)
 
+**Snapshot mode** (TUI only):
+- `--snapshot`: Force full redraw via resize, wait for settle, read clean frame
+  - Requires `--tui` on create. Incompatible with `--follow`, `--all`, `--wait`.
+  - Compatible with `--settle` (overrides default 300ms), `--strip-ansi`, `--json`, `--head`, `--tail`, `--timeout`.
+
 **Blocking modes**:
 - `--wait "pattern"`: Wait for regex pattern match
 - `--settle N`: Wait for N ms of silence
@@ -166,6 +171,8 @@ shelli read myshell --follow           # stream continuously (Ctrl+C to stop)
 shelli read pyrepl --wait ">>>"        # wait for Python prompt
 shelli read myshell --settle 300       # wait for 300ms silence
 shelli read myshell --strip-ansi       # clean output
+shelli read tui-app --snapshot --strip-ansi       # clean TUI frame
+shelli read tui-app --snapshot --tail 10          # last 10 lines of TUI
 ```
 
 ### list - List all sessions
@@ -539,12 +546,13 @@ shelli create session --cmd "command"
 
 ### TUI Applications - Now Supported
 
-shelli supports TUI applications using `--follow` mode for continuous streaming, and `--tui` mode for reduced storage:
+shelli supports TUI applications using `--follow` mode for continuous streaming, `--tui` mode for reduced storage, and `--snapshot` for clean frame capture:
 
 ```bash
 shelli create mon --cmd "btop" --tui
 shelli read mon --follow              # streams output, renders TUI
-shelli resize mon --cols 150 --rows 50  # resize works too
+shelli read mon --snapshot --strip-ansi  # force redraw, get clean frame
+shelli resize mon --cols 150 --rows 50   # resize works too
 ```
 
 **TUI Mode (`--tui` flag):**

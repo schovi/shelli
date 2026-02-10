@@ -2,6 +2,7 @@ package ansi
 
 import (
 	"bytes"
+	"fmt"
 	"testing"
 )
 
@@ -615,6 +616,9 @@ func TestDefaultTUIStrategy(t *testing.T) {
 	if !s.CursorHome {
 		t.Error("CursorHome should be enabled")
 	}
+	if !s.CursorJumpTop {
+		t.Error("CursorJumpTop should be enabled")
+	}
 	if s.MaxSize != 100*1024 {
 		t.Errorf("MaxSize = %d, want %d", s.MaxSize, 100*1024)
 	}
@@ -801,6 +805,149 @@ func TestFrameDetector_CrossChunkCursorHomeHeuristic(t *testing.T) {
 		result = d.Process([]byte("\x1b[1;1Hnew content"))
 		if result.Truncate {
 			t.Error("should NOT truncate when heuristic marker is beyond lookback window")
+		}
+	})
+}
+
+func TestFrameDetector_CursorJumpTop(t *testing.T) {
+	// Helper: build cursor position sequence ESC[row;1H
+	cursorPos := func(row int) string {
+		return fmt.Sprintf("\x1b[%d;1H", row)
+	}
+
+	t.Run("jump from row 30 to row 1 triggers truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		// Build up rows to exceed threshold (10)
+		var buf []byte
+		for r := 1; r <= 30; r++ {
+			buf = append(buf, []byte(cursorPos(r)+"line content")...)
+		}
+		result := d.Process(buf)
+		if result.Truncate {
+			t.Error("building up rows should not truncate")
+		}
+
+		// Now jump back to row 1
+		result = d.Process([]byte(cursorPos(1) + "new frame"))
+		if !result.Truncate {
+			t.Error("jump from row 30 to row 1 should truncate")
+		}
+		if !bytes.Equal(result.DataAfter, []byte("new frame")) {
+			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "new frame")
+		}
+	})
+
+	t.Run("jump to row 2 also triggers truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		var buf []byte
+		for r := 1; r <= 20; r++ {
+			buf = append(buf, []byte(cursorPos(r)+"content")...)
+		}
+		d.Process(buf)
+
+		result := d.Process([]byte(cursorPos(2) + "new frame"))
+		if !result.Truncate {
+			t.Error("jump to row 2 should also truncate")
+		}
+	})
+
+	t.Run("sequential rows do not trigger truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		// Write rows 1..20 sequentially in one chunk
+		var buf []byte
+		for r := 1; r <= 20; r++ {
+			buf = append(buf, []byte(cursorPos(r)+"content")...)
+		}
+		result := d.Process(buf)
+		if result.Truncate {
+			t.Error("sequential rows should not truncate")
+		}
+	})
+
+	t.Run("max row below threshold does not truncate even on jump", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		// Only go up to row 5 (below threshold of 10)
+		var buf []byte
+		for r := 1; r <= 5; r++ {
+			buf = append(buf, []byte(cursorPos(r)+"content")...)
+		}
+		d.Process(buf)
+
+		result := d.Process([]byte(cursorPos(1) + "new frame"))
+		if result.Truncate {
+			t.Error("should not truncate when maxRowSeen < threshold")
+		}
+	})
+
+	t.Run("strategy disabled does not truncate", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: false})
+
+		var buf []byte
+		for r := 1; r <= 30; r++ {
+			buf = append(buf, []byte(cursorPos(r)+"content")...)
+		}
+		d.Process(buf)
+
+		result := d.Process([]byte(cursorPos(1) + "new frame"))
+		if result.Truncate {
+			t.Error("should not truncate when CursorJumpTop is disabled")
+		}
+	})
+
+	t.Run("cross-chunk row tracking persists", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		// Chunk 1: rows 1..15
+		var buf1 []byte
+		for r := 1; r <= 15; r++ {
+			buf1 = append(buf1, []byte(cursorPos(r)+"content")...)
+		}
+		result := d.Process(buf1)
+		if result.Truncate {
+			t.Error("chunk 1 should not truncate")
+		}
+
+		// Chunk 2: rows 16..25
+		var buf2 []byte
+		for r := 16; r <= 25; r++ {
+			buf2 = append(buf2, []byte(cursorPos(r)+"content")...)
+		}
+		result = d.Process(buf2)
+		if result.Truncate {
+			t.Error("chunk 2 should not truncate")
+		}
+
+		// Chunk 3: jump back to row 1
+		result = d.Process([]byte(cursorPos(1) + "new frame"))
+		if !result.Truncate {
+			t.Error("cross-chunk jump should truncate")
+		}
+	})
+
+	t.Run("cross-chunk partial cursor position sequence", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		// Build up rows first
+		var buf []byte
+		for r := 1; r <= 20; r++ {
+			buf = append(buf, []byte(cursorPos(r)+"content")...)
+		}
+		d.Process(buf)
+
+		// Send partial sequence: ESC[1;1 (missing H)
+		result := d.Process([]byte("data\x1b[1;1"))
+		if result.Truncate {
+			t.Error("partial sequence should not truncate yet")
+		}
+
+		// Complete the sequence in next chunk
+		result = d.Process([]byte("Hnew frame"))
+		if !result.Truncate {
+			t.Error("completed cross-chunk cursor position should truncate")
 		}
 	})
 }

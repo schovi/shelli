@@ -71,6 +71,7 @@ CLI/MCP → daemon.Client → Unix socket → daemon.Server → PTY → subproce
 - **Session states**: Sessions can be "running" or "stopped" with timestamp tracking
 - **TTL cleanup**: Optional auto-deletion of stopped sessions via `--stopped-ttl`
 - **TUI mode**: `--tui` flag enables frame detection with multiple strategies (screen clear, sync mode, cursor home, size cap) to auto-truncate buffer for TUI apps
+- **Snapshot read**: `--snapshot` on read triggers a same-dimensions resize (SIGWINCH) to force a full TUI redraw, waits for settle, then reads the clean frame. Requires TUI mode.
 
 ## Claude Plugin
 
@@ -79,6 +80,7 @@ CLI/MCP → daemon.Client → Unix socket → daemon.Server → PTY → subproce
 Skills in `.claude/skills/`:
 - `shelli/SKILL.md`: Full command reference
 - `shelli-auto-detector/SKILL.md`: Pattern detection for automatic usage
+- `tui-test/SKILL.md`: Automated TUI app testing protocol
 
 ## Tooling
 
@@ -99,5 +101,6 @@ When making changes, keep documentation in sync across these files:
 | Architecture change | CLAUDE.md, README.md (if user-facing) |
 | New internal component | CLAUDE.md |
 | Plugin behavior change | `.claude/skills/shelli-auto-detector/SKILL.md` |
+| CLI/MCP interface change | `.claude/skills/tui-test/SKILL.md` (update test protocol, app registry, and commands to match new interface) |
 
 **Rule**: After any feature or architecture change, update CLAUDE.md to reflect the current state. CLAUDE.md should always accurately describe the codebase structure.

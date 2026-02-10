@@ -16,6 +16,9 @@ import (
 //	\e         - Escape (ASCII 27)
 //	\\         - Literal backslash
 //
+// Unrecognized escape sequences pass through literally (backslash is dropped).
+// For example, \! becomes !, \? becomes ?.
+//
 // Common control characters:
 //
 //	\x03 - Ctrl+C (interrupt)
@@ -79,7 +82,8 @@ func Interpret(s string) (string, error) {
 			i += 2
 
 		default:
-			return "", fmt.Errorf("unknown escape sequence \\%c at position %d", s[i+1], i)
+			result.WriteByte(s[i+1])
+			i += 2
 		}
 	}
 

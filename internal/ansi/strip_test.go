@@ -68,6 +68,56 @@ func TestStrip(t *testing.T) {
 			input:    "\x1b[31m\x1b[0m\r",
 			expected: "",
 		},
+		{
+			name:     "strip reverse index (ESC M)",
+			input:    "\x1bMline content",
+			expected: "line content",
+		},
+		{
+			name:     "strip index / line feed (ESC D)",
+			input:    "\x1bDline content",
+			expected: "line content",
+		},
+		{
+			name:     "strip full reset (ESC c)",
+			input:    "\x1bcline content",
+			expected: "line content",
+		},
+		{
+			name:     "mixed ESC+letter with CSI",
+			input:    "\x1bMline content\x1b[31mred\x1b[0m",
+			expected: "line contentred",
+		},
+		{
+			name:     "cursor positioning different rows produce newlines",
+			input:    "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3",
+			expected: "row1\nrow2\nrow3",
+		},
+		{
+			name:     "cursor positioning same row different columns no newline",
+			input:    "\x1b[1;1Hfirst\x1b[1;10Hsecond",
+			expected: "firstsecond",
+		},
+		{
+			name:     "cursor positioning interleaved with color codes",
+			input:    "\x1b[1;1H\x1b[31mred\x1b[0m\x1b[2;1H\x1b[32mgreen\x1b[0m",
+			expected: "red\ngreen",
+		},
+		{
+			name:     "cursor positioning F variant",
+			input:    "\x1b[1;1Frow1\x1b[2;1Frow2",
+			expected: "row1\nrow2",
+		},
+		{
+			name:     "no cursor positioning unchanged",
+			input:    "plain text\nwith newlines",
+			expected: "plain text\nwith newlines",
+		},
+		{
+			name:     "cursor positioning row jump backward",
+			input:    "\x1b[5;1Hrow5\x1b[1;1Hrow1",
+			expected: "row5\nrow1",
+		},
 	}
 
 	for _, tt := range tests {

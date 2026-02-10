@@ -216,12 +216,16 @@ shelli read <name> [flags]
 - `--follow` / `-f` - Continuous output like `tail -f` (great for TUIs)
 - `--follow-ms N` - Poll interval in milliseconds (default: 100)
 
+**Snapshot mode** (TUI only):
+- `--snapshot` - Force a full redraw via resize, wait for settle, read clean frame
+
 **Blocking modes** (returns new output):
 - `--wait "pattern"` - Wait for regex pattern match
 - `--settle N` - Wait for N ms of silence
 
 Other flags:
 - `--timeout N` - Max wait time in seconds (default: 10)
+- `--settle N` - Override default settle time (300ms for snapshot, used with --wait/--settle modes)
 - `--strip-ansi` - Remove terminal escape codes
 - `--json` - Output as JSON
 
@@ -231,6 +235,7 @@ shelli read myshell                    # new output, instant
 shelli read myshell --all              # all output, instant
 shelli read pyrepl --wait ">>>"        # wait for Python prompt
 shelli read myshell --settle 300       # wait for 300ms silence
+shelli read tui-app --snapshot --strip-ansi  # clean TUI frame
 ```
 
 ### search
@@ -494,11 +499,12 @@ shelli kill py
 
 ### TUI Applications
 
-shelli supports TUI applications using `--follow` mode and `--tui` mode for buffer management:
+shelli supports TUI applications using `--follow` mode, `--tui` mode for buffer management, and `--snapshot` for clean frame capture:
 
 ```bash
 shelli create mon --cmd "btop" --tui   # TUI mode auto-truncates buffer
 shelli read mon --follow               # streams output continuously
+shelli read mon --snapshot --strip-ansi  # force redraw, get clean frame
 ```
 
 **TUI Mode (`--tui` flag):**

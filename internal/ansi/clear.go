@@ -4,19 +4,21 @@ import "bytes"
 
 // TruncationStrategy defines which detection methods are enabled for TUI mode.
 type TruncationStrategy struct {
-	ScreenClear bool // ESC[2J, ESC[?1049h, ESC c
-	SyncMode    bool // ESC[?2026h (sync begin)
-	CursorHome  bool // ESC[1;1H with heuristics
-	MaxSize     int  // Size cap in bytes (0 = disabled)
+	ScreenClear    bool // ESC[2J, ESC[?1049h, ESC c
+	SyncMode       bool // ESC[?2026h (sync begin)
+	CursorHome     bool // ESC[1;1H with heuristics
+	CursorJumpTop  bool // ESC[row;colH jump from high row to row<=2
+	MaxSize        int  // Size cap in bytes (0 = disabled)
 }
 
 // DefaultTUIStrategy returns the recommended settings for TUI mode.
 func DefaultTUIStrategy() TruncationStrategy {
 	return TruncationStrategy{
-		ScreenClear: true,
-		SyncMode:    true,
-		CursorHome:  true,
-		MaxSize:     100 * 1024, // 100KB fallback
+		ScreenClear:   true,
+		SyncMode:      true,
+		CursorHome:    true,
+		CursorJumpTop: true,
+		MaxSize:       100 * 1024, // 100KB fallback
 	}
 }
 
@@ -29,6 +31,7 @@ type FrameDetector struct {
 	bufferSize          int    // track accumulated size for MaxSize check
 	bytesSinceLastFrame int    // bytes processed since last frame boundary (-1 = never seen)
 	seenFrame           bool   // true if we've ever seen a frame boundary
+	maxRowSeen          int    // highest row seen in cursor position sequences (for CursorJumpTop)
 }
 
 // DetectResult contains the result of processing a chunk.
@@ -70,8 +73,9 @@ var cursorHomeHeuristics = [][]byte{
 }
 
 const (
-	maxSequenceLen     = 8
-	cursorHomeLookback = 20
+	maxSequenceLen        = 12
+	cursorHomeLookback    = 20
+	cursorJumpTopThreshold = 10 // minimum maxRowSeen before a jump to row<=2 counts as truncation
 )
 
 // Process analyzes a chunk and returns whether truncation should occur
@@ -100,6 +104,19 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 					}
 				}
 				lastTruncEnd = i + len(ts.seq)
+				d.maxRowSeen = 0
+			}
+		}
+
+		// Cursor jump-to-top detection
+		if d.strategy.CursorJumpTop && data[i] == 0x1B {
+			if row, end, ok := parseCursorRow(data, i); ok {
+				if row <= 2 && d.maxRowSeen >= cursorJumpTopThreshold {
+					lastTruncEnd = end
+					d.maxRowSeen = 0
+				} else if row > d.maxRowSeen {
+					d.maxRowSeen = row
+				}
 			}
 		}
 	}
@@ -117,6 +134,11 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 					if isPrefixOf(remaining, ts.seq) && len(remaining) < len(ts.seq) {
 						pendingStart = i
 						break
+					}
+				}
+				if pendingStart == len(data) && d.strategy.CursorJumpTop {
+					if isPartialCursorPosition(remaining) {
+						pendingStart = i
 					}
 				}
 				if pendingStart != len(data) {
@@ -191,6 +213,8 @@ func (d *FrameDetector) strategyEnabled(strategy string) bool {
 		return d.strategy.SyncMode
 	case "cursor_home":
 		return d.strategy.CursorHome
+	case "cursor_jump_top":
+		return d.strategy.CursorJumpTop
 	default:
 		return false
 	}
@@ -261,6 +285,78 @@ func (d *FrameDetector) Flush() []byte {
 	pending := d.pending
 	d.pending = nil
 	return pending
+}
+
+// isPartialCursorPosition returns true if data looks like the start of an
+// incomplete ESC[row;colH or ESC[row;colF sequence.
+func isPartialCursorPosition(data []byte) bool {
+	if len(data) < 1 || data[0] != 0x1B {
+		return false
+	}
+	if len(data) < 2 {
+		return true // just ESC, could be anything
+	}
+	if data[1] != '[' {
+		return false
+	}
+	// ESC[ followed by digits, optional semicolons, and more digits (but no terminator yet)
+	for j := 2; j < len(data); j++ {
+		if data[j] >= '0' && data[j] <= '9' {
+			continue
+		}
+		if data[j] == ';' {
+			continue
+		}
+		// Hit a non-digit, non-semicolon: this is a complete (or invalid) sequence
+		return false
+	}
+	// Ended without terminator: partial
+	return len(data) > 2
+}
+
+// parseCursorRow parses ESC[row;colH or ESC[row;colF at position i in data.
+// Returns the row number, the byte index after the sequence, and whether parsing succeeded.
+// Expects data[i] == 0x1B and data[i+1] == '['.
+func parseCursorRow(data []byte, i int) (row int, endIndex int, ok bool) {
+	if i+2 >= len(data) || data[i] != 0x1B || data[i+1] != '[' {
+		return 0, 0, false
+	}
+
+	j := i + 2
+	row = 0
+	hasRow := false
+
+	// Parse row number
+	for j < len(data) && data[j] >= '0' && data[j] <= '9' {
+		row = row*10 + int(data[j]-'0')
+		hasRow = true
+		j++
+	}
+
+	if j >= len(data) {
+		return 0, 0, false
+	}
+
+	// After row, expect ';' then col then 'H'/'F', OR just 'H'/'F' (row-only form)
+	if data[j] == ';' {
+		j++ // skip ';'
+		// Parse col number (we don't need the value)
+		for j < len(data) && data[j] >= '0' && data[j] <= '9' {
+			j++
+		}
+		if j >= len(data) {
+			return 0, 0, false
+		}
+	}
+
+	if data[j] == 'H' || data[j] == 'F' {
+		if !hasRow {
+			row = 1 // ESC[H defaults to row 1
+		}
+		return row, j + 1, true
+	}
+
+	return 0, 0, false
 }
 
 func isPrefixOf(data, seq []byte) bool {

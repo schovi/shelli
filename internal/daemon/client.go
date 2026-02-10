@@ -134,6 +134,39 @@ func (c *Client) Read(name, mode string, headLines, tailLines int) (string, int,
 	return output, int(posFloat), nil
 }
 
+func (c *Client) Snapshot(name string, settleMs, timeoutSec, headLines, tailLines int) (string, int, error) {
+	resp, err := c.send(Request{
+		Action:     "read",
+		Name:       name,
+		Snapshot:   true,
+		SettleMs:   settleMs,
+		TimeoutSec: timeoutSec,
+		HeadLines:  headLines,
+		TailLines:  tailLines,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if !resp.Success {
+		return "", 0, fmt.Errorf("%s", resp.Error)
+	}
+
+	data, err := extractMapData(resp)
+	if err != nil {
+		return "", 0, err
+	}
+
+	output, ok := data["output"].(string)
+	if !ok {
+		return "", 0, fmt.Errorf("missing or invalid output field")
+	}
+	posFloat, ok := data["position"].(float64)
+	if !ok {
+		return "", 0, fmt.Errorf("missing or invalid position field")
+	}
+	return output, int(posFloat), nil
+}
+
 func (c *Client) Send(name, input string, newline bool) error {
 	resp, err := c.send(Request{
 		Action:  "send",
