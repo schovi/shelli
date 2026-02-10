@@ -122,6 +122,7 @@ Flags:
 - `--cwd /path` - Set working directory
 - `--cols N` - Terminal columns (default: 80)
 - `--rows N` - Terminal rows (default: 24)
+- `--tui` - Enable TUI mode (auto-truncate buffer on screen clear)
 - `--json` - Output as JSON
 
 Examples:
@@ -132,6 +133,7 @@ shelli create db --cmd "psql -d mydb"        # PostgreSQL
 shelli create server --cmd "ssh user@host"   # SSH session
 shelli create dev --env "DEBUG=1" --cwd /app # with env and cwd
 shelli create wide --cols 200 --rows 50      # large terminal
+shelli create vim --cmd "vim" --tui          # TUI mode for editors
 ```
 
 ### exec

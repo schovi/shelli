@@ -36,14 +36,15 @@ type SessionInfo struct {
 }
 
 type Server struct {
-	mu        sync.Mutex
-	sessions  map[string]*Session
-	ptys      map[string]*os.File
-	cmds      map[string]*exec.Cmd
-	doneChans map[string]chan struct{}
-	socketDir string
-	storage   OutputStorage
-	listener  net.Listener
+	mu             sync.Mutex
+	sessions       map[string]*Session
+	ptys           map[string]*os.File
+	cmds           map[string]*exec.Cmd
+	doneChans      map[string]chan struct{}
+	clearDetectors map[string]*ansi.ScreenClearDetector
+	socketDir      string
+	storage        OutputStorage
+	listener       net.Listener
 
 	stoppedTTL      time.Duration
 	cleanupStopChan chan struct{}
@@ -88,6 +89,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		ptys:            make(map[string]*os.File),
 		cmds:            make(map[string]*exec.Cmd),
 		doneChans:       make(map[string]chan struct{}),
+		clearDetectors:  make(map[string]*ansi.ScreenClearDetector),
 		socketDir:       socketDir,
 		storage:         NewMemoryStorage(DefaultMaxOutputSize),
 		cleanupStopChan: make(chan struct{}),
@@ -241,6 +243,7 @@ type Request struct {
 	Rows       int      `json:"rows,omitempty"`
 	Env        []string `json:"env,omitempty"`
 	Cwd        string   `json:"cwd,omitempty"`
+	TUIMode    bool     `json:"tui_mode,omitempty"`
 }
 
 type Response struct {
@@ -351,6 +354,7 @@ func (s *Server) handleCreate(req Request) Response {
 		ReadPos:   0,
 		Cols:      cols,
 		Rows:      rows,
+		TUIMode:   req.TUIMode,
 	}
 
 	if err := s.storage.Create(req.Name, meta); err != nil {
@@ -371,6 +375,9 @@ func (s *Server) handleCreate(req Request) Response {
 	s.ptys[req.Name] = ptmx
 	s.cmds[req.Name] = cmd
 	s.doneChans[req.Name] = make(chan struct{})
+	if req.TUIMode {
+		s.clearDetectors[req.Name] = ansi.NewScreenClearDetector()
+	}
 
 	go s.captureOutput(req.Name, ptmx, cmd)
 
@@ -387,6 +394,7 @@ func (s *Server) handleCreate(req Request) Response {
 func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	s.mu.Lock()
 	done := s.doneChans[name]
+	detector := s.clearDetectors[name]
 	s.mu.Unlock()
 
 	buf := make([]byte, ReadBufferSize)
@@ -400,7 +408,17 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 		ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		n, err := ptmx.Read(buf)
 		if n > 0 {
-			s.storage.Append(name, buf[:n])
+			if detector != nil {
+				result := detector.Process(buf[:n])
+				if result.ClearFound {
+					s.storage.Clear(name)
+				}
+				if len(result.DataAfter) > 0 {
+					s.storage.Append(name, result.DataAfter)
+				}
+			} else {
+				s.storage.Append(name, buf[:n])
+			}
 		}
 		if err != nil && !isTimeout(err) {
 			break
@@ -416,6 +434,7 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	delete(s.ptys, name)
 	delete(s.cmds, name)
 	delete(s.doneChans, name)
+	delete(s.clearDetectors, name)
 
 	if sess, ok := s.sessions[name]; ok {
 		sess.State = StateStopped
@@ -651,6 +670,7 @@ func (s *Server) handleKill(req Request) Response {
 
 	s.storage.Delete(req.Name)
 	delete(s.sessions, req.Name)
+	delete(s.clearDetectors, req.Name)
 
 	return Response{Success: true}
 }

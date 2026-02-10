@@ -51,6 +51,7 @@ Flags:
 - `--cwd /path`: Set working directory
 - `--cols N`: Terminal columns (default: 80)
 - `--rows N`: Terminal rows (default: 24)
+- `--tui`: Enable TUI mode (auto-truncate buffer on screen clear)
 - `--json`: Output session info as JSON
 
 Examples:
@@ -63,6 +64,7 @@ shelli create server --cmd "ssh user@host"   # SSH session
 shelli create redis --cmd "redis-cli"        # Redis CLI
 shelli create dev --env "DEBUG=1" --cwd /app # with env and working dir
 shelli create wide --cols 200 --rows 50      # large terminal
+shelli create vim --cmd "vim" --tui          # TUI mode for editors
 ```
 
 ### exec - Send command and wait for result (primary command for AI)
@@ -537,13 +539,19 @@ shelli create session --cmd "command"
 
 ### TUI Applications - Now Supported
 
-shelli supports TUI applications using `--follow` mode for continuous streaming:
+shelli supports TUI applications using `--follow` mode for continuous streaming, and `--tui` mode for reduced storage:
 
 ```bash
-shelli create mon --cmd "btop"
+shelli create mon --cmd "btop" --tui
 shelli read mon --follow              # streams output, renders TUI
 shelli resize mon --cols 150 --rows 50  # resize works too
 ```
+
+**TUI Mode (`--tui` flag):**
+
+When enabled, shelli detects screen clear sequences (ESC[2J, ESC[?1049h, ESC c) and truncates all previous buffer content. This reduces storage from ~50MB to ~2KB for typical TUI sessions.
+
+Use `--tui` for apps that frequently redraw the screen (vim, htop, btop, k9s). Do not use for apps where you need to preserve scrollback history.
 
 **What works well:**
 - System monitors: `btop`, `htop`, `k9s`
