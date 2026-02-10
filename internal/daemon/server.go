@@ -627,6 +627,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 	s.mu.Lock()
 	if fd, ok := s.frameDetectors[req.Name]; ok {
 		fd.Reset()
+		fd.SetSnapshotMode(true)
 	}
 	s.mu.Unlock()
 
@@ -729,6 +730,12 @@ func (s *Server) handleSnapshot(req Request) Response {
 			return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
 		}
 	}
+
+	s.mu.Lock()
+	if fd, ok := s.frameDetectors[req.Name]; ok {
+		fd.SetSnapshotMode(false)
+	}
+	s.mu.Unlock()
 
 	result := string(output)
 	if req.HeadLines > 0 || req.TailLines > 0 {

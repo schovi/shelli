@@ -850,6 +850,50 @@ func TestFrameDetector_CrossChunkCursorHomeHeuristic(t *testing.T) {
 	})
 }
 
+func TestFrameDetector_SnapshotMode(t *testing.T) {
+	t.Run("sync mode suppressed during snapshot mode", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+		d.SetSnapshotMode(true)
+
+		result := d.Process([]byte("old\x1b[?2026hnew\x1b[?2026l"))
+		if result.Truncate {
+			t.Error("sync mode should NOT truncate during snapshot mode")
+		}
+		if !bytes.Equal(result.DataAfter, []byte("old\x1b[?2026hnew\x1b[?2026l")) {
+			t.Errorf("DataAfter = %q, want full data", result.DataAfter)
+		}
+	})
+
+	t.Run("screen clear still works during snapshot mode", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+		d.SetSnapshotMode(true)
+
+		result := d.Process([]byte("old\x1b[2Jnew"))
+		if !result.Truncate {
+			t.Error("screen clear should still truncate during snapshot mode")
+		}
+		if !bytes.Equal(result.DataAfter, []byte("new")) {
+			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "new")
+		}
+	})
+
+	t.Run("sync mode resumes after snapshot mode disabled", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+		d.SetSnapshotMode(true)
+
+		d.Process([]byte("data\x1b[?2026hmore"))
+		d.SetSnapshotMode(false)
+
+		result := d.Process([]byte("old\x1b[?2026hnew"))
+		if !result.Truncate {
+			t.Error("sync mode should truncate after snapshot mode disabled")
+		}
+		if !bytes.Equal(result.DataAfter, []byte("new")) {
+			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "new")
+		}
+	})
+}
+
 func TestFrameDetector_CursorJumpTop(t *testing.T) {
 	// Helper: build cursor position sequence ESC[row;1H
 	cursorPos := func(row int) string {

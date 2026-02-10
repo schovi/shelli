@@ -32,6 +32,7 @@ type FrameDetector struct {
 	bytesSinceLastFrame int    // bytes processed since last frame boundary (-1 = never seen)
 	seenFrame           bool   // true if we've ever seen a frame boundary
 	maxRowSeen          int    // highest row seen in cursor position sequences (for CursorJumpTop)
+	snapshotMode        bool   // when true, sync_mode truncation is suppressed
 }
 
 // DetectResult contains the result of processing a chunk.
@@ -210,7 +211,7 @@ func (d *FrameDetector) strategyEnabled(strategy string) bool {
 	case "screen_clear":
 		return d.strategy.ScreenClear
 	case "sync_mode":
-		return d.strategy.SyncMode
+		return d.strategy.SyncMode && !d.snapshotMode
 	case "cursor_home":
 		return d.strategy.CursorHome
 	case "cursor_jump_top":
@@ -218,6 +219,13 @@ func (d *FrameDetector) strategyEnabled(strategy string) bool {
 	default:
 		return false
 	}
+}
+
+// SetSnapshotMode enables or disables snapshot mode.
+// When enabled, sync_mode truncation is suppressed so partial redraws
+// within sync boundaries accumulate into a complete frame.
+func (d *FrameDetector) SetSnapshotMode(enabled bool) {
+	d.snapshotMode = enabled
 }
 
 // checkCursorHomeHeuristic returns true if cursor home should trigger truncation.
