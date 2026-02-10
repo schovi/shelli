@@ -127,7 +127,7 @@ func TestScreenClearDetector(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			d := NewScreenClearDetector()
+			d := NewFrameDetector(TruncationStrategy{ScreenClear: true})
 
 			for i, chunk := range tt.chunks {
 				result := d.Process(chunk)
@@ -145,7 +145,7 @@ func TestScreenClearDetector(t *testing.T) {
 }
 
 func TestScreenClearDetector_Flush(t *testing.T) {
-	d := NewScreenClearDetector()
+	d := NewFrameDetector(TruncationStrategy{ScreenClear: true})
 
 	// Send chunk ending with partial escape sequence
 	result := d.Process([]byte("data\x1b"))
@@ -171,7 +171,7 @@ func TestScreenClearDetector_Flush(t *testing.T) {
 
 func TestScreenClearDetector_RealWorldVim(t *testing.T) {
 	// Simulate vim startup which uses alternate buffer
-	d := NewScreenClearDetector()
+	d := NewFrameDetector(TruncationStrategy{ScreenClear: true})
 
 	// vim typically sends: ESC[?1049h to enter alternate buffer
 	chunks := [][]byte{

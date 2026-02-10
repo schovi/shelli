@@ -420,13 +420,13 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 			if detector != nil {
 				result := detector.Process(buf[:n])
 				if result.Truncate {
-					s.storage.Clear(name)
+					storage.Clear(name)
 				}
 				if len(result.DataAfter) > 0 {
-					s.storage.Append(name, result.DataAfter)
+					storage.Append(name, result.DataAfter)
 				}
 			} else {
-				s.storage.Append(name, buf[:n])
+				storage.Append(name, buf[:n])
 			}
 		}
 		if err != nil && !isTimeout(err) {
@@ -635,6 +635,7 @@ func (s *Server) handleStop(req Request) Response {
 		}()
 		delete(s.cmds, req.Name)
 	}
+	delete(s.frameDetectors, req.Name)
 
 	sess.State = StateStopped
 	now := time.Now()
@@ -754,6 +755,7 @@ func (s *Server) handleInfo(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
+	_, tuiMode := s.frameDetectors[req.Name]
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -777,6 +779,7 @@ func (s *Server) handleInfo(req Request) Response {
 		"read_position":  meta.ReadPos,
 		"cols":           meta.Cols,
 		"rows":           meta.Rows,
+		"tui_mode":       tuiMode,
 	}
 
 	if sess.StoppedAt != nil {

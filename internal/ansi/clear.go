@@ -1,5 +1,7 @@
 package ansi
 
+import "bytes"
+
 // TruncationStrategy defines which detection methods are enabled for TUI mode.
 type TruncationStrategy struct {
 	ScreenClear bool // ESC[2J, ESC[?1049h, ESC c
@@ -91,7 +93,7 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 			if !d.strategyEnabled(ts.strategy) {
 				continue
 			}
-			if i+len(ts.seq) <= len(data) && matchBytes(data[i:i+len(ts.seq)], ts.seq) {
+			if i+len(ts.seq) <= len(data) && bytes.Equal(data[i:i+len(ts.seq)], ts.seq) {
 				if ts.strategy == "cursor_home" {
 					if !d.checkCursorHomeHeuristic(data, i) {
 						continue
@@ -130,13 +132,14 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 		data = data[:pendingStart]
 	}
 
-	// Save trailing bytes for cross-chunk cursor-home lookback (after scan loop used old trail)
-	if len(data) >= cursorHomeLookback {
-		d.heuristicTrail = make([]byte, cursorHomeLookback)
-		copy(d.heuristicTrail, data[len(data)-cursorHomeLookback:])
-	} else if len(data) > 0 {
-		d.heuristicTrail = make([]byte, len(data))
-		copy(d.heuristicTrail, data)
+	if d.strategy.CursorHome {
+		if len(data) >= cursorHomeLookback {
+			d.heuristicTrail = make([]byte, cursorHomeLookback)
+			copy(d.heuristicTrail, data[len(data)-cursorHomeLookback:])
+		} else if len(data) > 0 {
+			d.heuristicTrail = make([]byte, len(data))
+			copy(d.heuristicTrail, data)
+		}
 	}
 
 	// Check for recent frame BEFORE updating (to catch size cap before recency expires)
@@ -218,7 +221,7 @@ func (d *FrameDetector) checkCursorHomeHeuristic(data []byte, pos int) bool {
 
 	for _, heuristic := range cursorHomeHeuristics {
 		for i := 0; i <= len(window)-len(heuristic); i++ {
-			if matchBytes(window[i:i+len(heuristic)], heuristic) {
+			if bytes.Equal(window[i:i+len(heuristic)], heuristic) {
 				return true
 			}
 		}
@@ -258,40 +261,6 @@ func (d *FrameDetector) Flush() []byte {
 	pending := d.pending
 	d.pending = nil
 	return pending
-}
-
-// ScreenClearDetector is an alias for backward compatibility.
-//
-// Deprecated: Use FrameDetector with DefaultTUIStrategy() instead.
-type ScreenClearDetector = FrameDetector
-
-// ClearResult is an alias for backward compatibility.
-//
-// Deprecated: Use DetectResult instead.
-type ClearResult = DetectResult
-
-// NewScreenClearDetector creates a detector with only screen clear enabled.
-//
-// Deprecated: Use NewFrameDetector with DefaultTUIStrategy() instead.
-func NewScreenClearDetector() *ScreenClearDetector {
-	return NewFrameDetector(TruncationStrategy{
-		ScreenClear: true,
-		SyncMode:    false,
-		CursorHome:  false,
-		MaxSize:     0,
-	})
-}
-
-func matchBytes(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 func isPrefixOf(data, seq []byte) bool {
