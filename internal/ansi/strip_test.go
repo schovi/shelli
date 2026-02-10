@@ -148,6 +148,31 @@ func TestStrip(t *testing.T) {
 			input:    "\x1b[1;1H\x1b)0text\x1b[2;1H\x1b#8more",
 			expected: "text\nmore",
 		},
+		{
+			name:     "ESC[nH row only sets row with col 1",
+			input:    "\x1b[1Hrow1\x1b[2Hrow2\x1b[3Hrow3",
+			expected: "row1\nrow2\nrow3",
+		},
+		{
+			name:     "ESC[H cursor home",
+			input:    "\x1b[3;5Hdeep\x1b[Hhome",
+			expected: "home\n\n    deep",
+		},
+		{
+			name:     "ESC[nG column absolute",
+			input:    "\x1b[1;1Hstart\x1b[10Gmid\x1b[20Gend",
+			expected: "start    mid       end",
+		},
+		{
+			name:     "ESC[nd row absolute keeps column",
+			input:    "\x1b[1;5Hfirst\x1b[3dthird",
+			expected: "    first\n\n         third",
+		},
+		{
+			name:     "btop-style separate row and col positioning",
+			input:    "\x1b[1HCPU 50%\x1b[2HMEM 8GB\x1b[3HNET 1Mbps",
+			expected: "CPU 50%\nMEM 8GB\nNET 1Mbps",
+		},
 	}
 
 	for _, tt := range tests {

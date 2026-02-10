@@ -17,6 +17,7 @@ var ansiPatterns = []*regexp.Regexp{
 }
 
 var cursorPosPattern = regexp.MustCompile(`\x1b\[(\d+);(\d+)([HF])`)
+var cursorAnyPattern = regexp.MustCompile(`\x1b\[\d*;?\d*[HFGd]`)
 
 const (
 	maxGridCols = 500
@@ -24,11 +25,11 @@ const (
 )
 
 func convertCursorPositioning(s string) string {
-	if !cursorPosPattern.MatchString(s) {
+	if !cursorAnyPattern.MatchString(s) {
 		return s
 	}
 
-	// Pre-scan to determine grid dimensions
+	// Pre-scan to determine grid dimensions from all cursor positioning variants
 	maxRow, maxCol := 0, 0
 	for _, match := range cursorPosPattern.FindAllStringSubmatch(s, -1) {
 		row, _ := strconv.Atoi(match[1])
@@ -38,6 +39,43 @@ func convertCursorPositioning(s string) string {
 		}
 		if col > maxCol {
 			maxCol = col
+		}
+	}
+	// Also scan single-arg sequences: ESC[nH (row), ESC[nG (col), ESC[nd (row)
+	for i := 0; i < len(s); i++ {
+		if s[i] != 0x1B || i+1 >= len(s) || s[i+1] != '[' {
+			continue
+		}
+		j := i + 2
+		num := 0
+		hasNum := false
+		for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+			num = num*10 + int(s[j]-'0')
+			hasNum = true
+			j++
+		}
+		if j >= len(s) {
+			break
+		}
+		if s[j] == ';' {
+			continue // row;col form, already handled by cursorPosPattern
+		}
+		if !hasNum {
+			num = 1 // defaults to 1
+		}
+		switch s[j] {
+		case 'H', 'F':
+			if num > maxRow {
+				maxRow = num
+			}
+		case 'd':
+			if num > maxRow {
+				maxRow = num
+			}
+		case 'G':
+			if num > maxCol {
+				maxCol = num
+			}
 		}
 	}
 
@@ -80,6 +118,14 @@ func convertCursorPositioning(s string) string {
 					curCol = 0
 				}
 				i += loc[1]
+				continue
+			}
+
+			// Try single-arg cursor sequences: ESC[nH, ESC[H, ESC[nG, ESC[nd
+			if row, col, end, ok := parseSingleArgCursor(s, i, curRow, curCol); ok {
+				curRow = row
+				curCol = col
+				i = end
 				continue
 			}
 
@@ -148,6 +194,41 @@ func convertCursorPositioning(s string) string {
 	}
 
 	return b.String()
+}
+
+// parseSingleArgCursor parses ESC[nH (row only), ESC[H (home), ESC[nG (col absolute),
+// ESC[nd (row absolute) at position i in s. Returns 0-based row, col, end index, and ok.
+// curRow/curCol are the current position (used to keep the unchanged dimension).
+func parseSingleArgCursor(s string, i, curRow, curCol int) (row, col, end int, ok bool) {
+	if i+1 >= len(s) || s[i] != 0x1B || s[i+1] != '[' {
+		return 0, 0, 0, false
+	}
+	j := i + 2
+	num := 0
+	hasNum := false
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		num = num*10 + int(s[j]-'0')
+		hasNum = true
+		j++
+	}
+	if j >= len(s) {
+		return 0, 0, 0, false
+	}
+	if s[j] == ';' {
+		return 0, 0, 0, false // row;col form, handled by cursorPosPattern
+	}
+	if !hasNum {
+		num = 1
+	}
+	switch s[j] {
+	case 'H', 'F':
+		return num - 1, 0, j + 1, true // row only, col defaults to 1 (0-based: 0)
+	case 'G':
+		return curRow, num - 1, j + 1, true // col absolute, keep row
+	case 'd':
+		return num - 1, curCol, j + 1, true // row absolute, keep col
+	}
+	return 0, 0, 0, false
 }
 
 func isCSITerminator(c byte) bool {
