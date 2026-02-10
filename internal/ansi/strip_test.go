@@ -138,6 +138,16 @@ func TestStrip(t *testing.T) {
 			input:    "\x1b[1;1HCPU\x1b[1;40HMEM\x1b[2;1H50%\x1b[2;40H8GB",
 			expected: "CPU                                    MEM\n50%                                    8GB",
 		},
+		{
+			name:     "ESC(B with cursor positioning does not leave stray B",
+			input:    "\x1b[1;1H\x1b(Bhello\x1b[2;1H\x1b(Bworld",
+			expected: "hello\nworld",
+		},
+		{
+			name:     "ESC)0 and ESC#8 with cursor positioning",
+			input:    "\x1b[1;1H\x1b)0text\x1b[2;1H\x1b#8more",
+			expected: "text\nmore",
+		},
 	}
 
 	for _, tt := range tests {

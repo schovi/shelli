@@ -96,6 +96,11 @@ func convertCursorPositioning(s string) string {
 		}
 
 		if s[i] == 0x1B {
+			// 3-byte ESC sequences: ESC(X, ESC)X, ESC#X (character set, DEC line drawing)
+			if i+2 < len(s) && (s[i+1] == '(' || s[i+1] == ')' || s[i+1] == '#') {
+				i += 3
+				continue
+			}
 			// Skip other ESC sequences (ESC + one char)
 			i += 2
 			if i > len(s) {
