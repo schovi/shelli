@@ -695,6 +695,41 @@ func (s *Server) handleSnapshot(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
 	}
 
+	// Retry once if empty and time remains: some apps need a second SIGWINCH nudge
+	if len(output) == 0 && time.Now().Before(deadline) {
+		if cmd != nil && cmd.Process != nil {
+			cmd.Process.Signal(syscall.SIGWINCH)
+		}
+
+		retrySettle := settleDuration * 2
+		lastChangeTime = time.Now()
+		lastSize = int64(-1)
+
+		for time.Now().Before(deadline) {
+			time.Sleep(SnapshotPollInterval)
+
+			size, err := storage.Size(req.Name)
+			if err != nil {
+				break
+			}
+
+			if size != lastSize {
+				lastSize = size
+				lastChangeTime = time.Now()
+				continue
+			}
+
+			if size > 0 && time.Since(lastChangeTime) >= retrySettle {
+				break
+			}
+		}
+
+		output, err = storage.ReadAll(req.Name)
+		if err != nil {
+			return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+		}
+	}
+
 	result := string(output)
 	if req.HeadLines > 0 || req.TailLines > 0 {
 		result = limitLines(result, req.HeadLines, req.TailLines)
