@@ -42,6 +42,7 @@ type Server struct {
 	cmds           map[string]*exec.Cmd
 	doneChans      map[string]chan struct{}
 	frameDetectors map[string]*ansi.FrameDetector
+	responders     map[string]*ansi.TerminalResponder
 	socketDir      string
 	storage        OutputStorage
 	listener       net.Listener
@@ -90,6 +91,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		cmds:            make(map[string]*exec.Cmd),
 		doneChans:       make(map[string]chan struct{}),
 		frameDetectors:  make(map[string]*ansi.FrameDetector),
+		responders:      make(map[string]*ansi.TerminalResponder),
 		socketDir:       socketDir,
 		storage:         NewMemoryStorage(DefaultMaxOutputSize),
 		cleanupStopChan: make(chan struct{}),
@@ -380,6 +382,7 @@ func (s *Server) handleCreate(req Request) Response {
 	s.doneChans[req.Name] = make(chan struct{})
 	if req.TUIMode {
 		s.frameDetectors[req.Name] = ansi.NewFrameDetector(ansi.DefaultTUIStrategy())
+		s.responders[req.Name] = ansi.NewTerminalResponder(ptmx, cols, rows)
 	}
 
 	go s.captureOutput(req.Name, ptmx, cmd)
@@ -398,6 +401,7 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	s.mu.Lock()
 	done := s.doneChans[name]
 	detector := s.frameDetectors[name]
+	responder := s.responders[name]
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -420,8 +424,12 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 		ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		n, err := ptmx.Read(buf)
 		if n > 0 {
+			data := buf[:n]
+			if responder != nil {
+				data = responder.Process(data)
+			}
 			if detector != nil {
-				result := detector.Process(buf[:n])
+				result := detector.Process(data)
 				if result.Truncate {
 					storage.Clear(name)
 				}
@@ -429,7 +437,7 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 					storage.Append(name, result.DataAfter)
 				}
 			} else {
-				storage.Append(name, buf[:n])
+				storage.Append(name, data)
 			}
 		}
 		if err != nil && !isTimeout(err) {
@@ -447,6 +455,7 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	delete(s.cmds, name)
 	delete(s.doneChans, name)
 	delete(s.frameDetectors, name)
+	delete(s.responders, name)
 
 	if sess, ok := s.sessions[name]; ok {
 		sess.State = StateStopped
@@ -602,6 +611,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("session %q PTY not available", req.Name)}
 	}
 	cmd := s.cmds[req.Name]
+	responder := s.responders[req.Name]
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -610,9 +620,22 @@ func (s *Server) handleSnapshot(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
 	}
 
+	// Clear storage and reset frame detector before resize cycle.
+	// This ensures the settle loop starts from size=0 and waits for fresh data,
+	// preventing races where captureOutput's Clear+Append can be seen as empty.
+	storage.Clear(req.Name)
+	s.mu.Lock()
+	if fd, ok := s.frameDetectors[req.Name]; ok {
+		fd.Reset()
+	}
+	s.mu.Unlock()
+
 	tempCols := uint16(meta.Cols) + 1
 	tempRows := uint16(meta.Rows) + 1
 	pty.Setsize(ptmx, &pty.Winsize{Cols: tempCols, Rows: tempRows})
+	if responder != nil {
+		responder.SetSize(int(tempCols), int(tempRows))
+	}
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Signal(syscall.SIGWINCH)
 	}
@@ -620,6 +643,9 @@ func (s *Server) handleSnapshot(req Request) Response {
 
 	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(meta.Cols), Rows: uint16(meta.Rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize for snapshot: %v", err)}
+	}
+	if responder != nil {
+		responder.SetSize(meta.Cols, meta.Rows)
 	}
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Signal(syscall.SIGWINCH)
@@ -748,6 +774,7 @@ func (s *Server) handleStop(req Request) Response {
 		delete(s.cmds, req.Name)
 	}
 	delete(s.frameDetectors, req.Name)
+	delete(s.responders, req.Name)
 
 	sess.State = StateStopped
 	now := time.Now()
@@ -793,6 +820,7 @@ func (s *Server) handleKill(req Request) Response {
 	s.storage.Delete(req.Name)
 	delete(s.sessions, req.Name)
 	delete(s.frameDetectors, req.Name)
+	delete(s.responders, req.Name)
 
 	return Response{Success: true}
 }
@@ -944,6 +972,7 @@ func (s *Server) handleResize(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not running", req.Name)}
 	}
+	responder := s.responders[req.Name]
 
 	storage := s.storage
 	s.mu.Unlock()
@@ -964,6 +993,10 @@ func (s *Server) handleResize(req Request) Response {
 
 	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize: %v", err)}
+	}
+
+	if responder != nil {
+		responder.SetSize(cols, rows)
 	}
 
 	// Send SIGWINCH explicitly to ensure the process receives it

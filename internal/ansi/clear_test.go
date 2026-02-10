@@ -604,6 +604,47 @@ func TestFrameDetector_BufferSize(t *testing.T) {
 	}
 }
 
+func TestFrameDetector_Reset(t *testing.T) {
+	d := NewFrameDetector(DefaultTUIStrategy())
+
+	// Build up state
+	d.Process([]byte("\x1b[2Jframe content"))
+	d.Process([]byte("more data"))
+
+	if d.BufferSize() == 0 {
+		t.Error("BufferSize should be > 0 before Reset")
+	}
+	if !d.HasRecentFrame() {
+		t.Error("HasRecentFrame should be true before Reset")
+	}
+
+	d.Reset()
+
+	if d.BufferSize() != 0 {
+		t.Errorf("after Reset: BufferSize() = %d, want 0", d.BufferSize())
+	}
+	if d.HasRecentFrame() {
+		t.Error("after Reset: HasRecentFrame should be false")
+	}
+	if d.BytesSinceLastFrame() != 0 {
+		t.Errorf("after Reset: BytesSinceLastFrame() = %d, want 0", d.BytesSinceLastFrame())
+	}
+
+	// Flush should return nil (pending cleared)
+	if pending := d.Flush(); pending != nil {
+		t.Errorf("after Reset: Flush() = %q, want nil", pending)
+	}
+
+	// Detector should work normally after reset
+	result := d.Process([]byte("\x1b[2Jnew frame"))
+	if !result.Truncate {
+		t.Error("after Reset: should detect truncation normally")
+	}
+	if string(result.DataAfter) != "new frame" {
+		t.Errorf("after Reset: DataAfter = %q, want %q", result.DataAfter, "new frame")
+	}
+}
+
 func TestDefaultTUIStrategy(t *testing.T) {
 	s := DefaultTUIStrategy()
 

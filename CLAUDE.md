@@ -45,9 +45,10 @@ shelli provides persistent interactive shell sessions via PTY-backed processes m
 
 **Utilities** (`internal/`)
 - `wait/`: Output polling with settle-time and pattern-matching modes
-- `ansi/`: ANSI escape code stripping and TUI frame detection
-  - `strip.go`: ANSI escape code removal
+- `ansi/`: ANSI escape code stripping, TUI frame detection, terminal query responses
+  - `strip.go`: ANSI escape code removal with virtual screen buffer for cursor-positioned layout
   - `clear.go`: `FrameDetector` for TUI mode (screen clear, sync mode, cursor home, size cap)
+  - `responder.go`: `TerminalResponder` intercepts DA1/DA2/DSR/Kitty queries and writes responses to PTY
 - `escape/`: Escape sequence interpretation for raw mode
 
 ### Data Flow
@@ -71,7 +72,8 @@ CLI/MCP → daemon.Client → Unix socket → daemon.Server → PTY → subproce
 - **Session states**: Sessions can be "running" or "stopped" with timestamp tracking
 - **TTL cleanup**: Optional auto-deletion of stopped sessions via `--stopped-ttl`
 - **TUI mode**: `--tui` flag enables frame detection with multiple strategies (screen clear, sync mode, cursor home, size cap) to auto-truncate buffer for TUI apps
-- **Snapshot read**: `--snapshot` on read triggers a same-dimensions resize (SIGWINCH) to force a full TUI redraw, waits for settle, then reads the clean frame. Requires TUI mode.
+- **Snapshot read**: `--snapshot` on read clears storage and resets the frame detector, then triggers a resize cycle (SIGWINCH) to force a full TUI redraw, waits for settle, then reads the clean frame. Pre-clearing prevents races between captureOutput and the settle loop. Requires TUI mode.
+- **Terminal responder**: TUI sessions get a `TerminalResponder` that intercepts terminal capability queries (DA1, DA2, DSR, Kitty keyboard, DECRPM) in PTY output and writes responses to PTY input. Unblocks apps like yazi that block on unanswered queries.
 
 ## Claude Plugin
 

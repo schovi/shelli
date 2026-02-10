@@ -94,9 +94,9 @@ func TestStrip(t *testing.T) {
 			expected: "row1\nrow2\nrow3",
 		},
 		{
-			name:     "cursor positioning same row different columns no newline",
+			name:     "cursor positioning same row different columns",
 			input:    "\x1b[1;1Hfirst\x1b[1;10Hsecond",
-			expected: "firstsecond",
+			expected: "first    second",
 		},
 		{
 			name:     "cursor positioning interleaved with color codes",
@@ -116,7 +116,27 @@ func TestStrip(t *testing.T) {
 		{
 			name:     "cursor positioning row jump backward",
 			input:    "\x1b[5;1Hrow5\x1b[1;1Hrow1",
-			expected: "row5\nrow1",
+			expected: "row1\n\n\n\nrow5",
+		},
+		{
+			name:     "overwrite at same position",
+			input:    "\x1b[1;1Haaaa\x1b[1;1Hbb",
+			expected: "bbaa",
+		},
+		{
+			name:     "grid with gaps between columns",
+			input:    "\x1b[1;1Ha\x1b[1;10Hb\x1b[1;20Hc",
+			expected: "a        b         c",
+		},
+		{
+			name:     "mixed newlines and cursor positioning",
+			input:    "line1\n\x1b[3;1Hline3",
+			expected: "line1\n\nline3",
+		},
+		{
+			name:     "btop-style multi-column layout",
+			input:    "\x1b[1;1HCPU\x1b[1;40HMEM\x1b[2;1H50%\x1b[2;40H8GB",
+			expected: "CPU                                    MEM\n50%                                    8GB",
 		},
 	}
 

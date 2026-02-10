@@ -253,6 +253,17 @@ func (d *FrameDetector) checkCursorHomeHeuristic(data []byte, pos int) bool {
 	return false
 }
 
+// Reset clears all detector state (pending buffer, heuristics, counters).
+// Use before triggering a fresh TUI redraw (e.g., snapshot resize cycle).
+func (d *FrameDetector) Reset() {
+	d.pending = nil
+	d.heuristicTrail = nil
+	d.bufferSize = 0
+	d.bytesSinceLastFrame = 0
+	d.seenFrame = false
+	d.maxRowSeen = 0
+}
+
 // ResetBufferSize resets the buffer size tracker (call after external truncation).
 func (d *FrameDetector) ResetBufferSize() {
 	d.bufferSize = 0
