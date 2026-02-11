@@ -33,6 +33,9 @@ type FrameDetector struct {
 	seenFrame           bool   // true if we've ever seen a frame boundary
 	maxRowSeen          int    // highest row seen in cursor position sequences (for CursorJumpTop)
 	snapshotMode        bool   // when true, sync_mode truncation is suppressed
+	pendingJumpTruncEnd int  // byte offset where pending CursorJumpTop truncation would apply
+	pendingJumpActive   bool // true when a CursorJumpTop needs look-ahead resolution in next chunk
+	lastCursorHomePos   int  // byte position of last cursor_home truncation within current Process() call (-1 = none)
 }
 
 // DetectResult contains the result of processing a chunk.
@@ -74,9 +77,11 @@ var cursorHomeHeuristics = [][]byte{
 }
 
 const (
-	maxSequenceLen        = 12
-	cursorHomeLookback    = 20
-	cursorJumpTopThreshold = 10 // minimum maxRowSeen before a jump to row<=2 counts as truncation
+	maxSequenceLen         = 12
+	cursorHomeLookback     = 20
+	cursorJumpTopThreshold = 10   // minimum maxRowSeen before a jump to row<=2 counts as truncation
+	jumpLookAheadLen       = 50   // bytes to scan forward after a cursor jump to check for content
+	cursorHomeCooldownBytes = 4096 // bytes to suppress cursor_home after it fires
 )
 
 // Process analyzes a chunk and returns whether truncation should occur
@@ -91,8 +96,23 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 		d.pending = nil
 	}
 
-	// Find the last truncation sequence position
+	// Track cursor_home cooldown within this Process() call
+	d.lastCursorHomePos = -1
+
+	// Resolve pending CursorJumpTop from previous chunk.
+	// If content follows in this new chunk, the jump was a real frame boundary:
+	// set lastTruncEnd=0 so the caller clears previous data and keeps this chunk.
 	lastTruncEnd := -1
+	if d.pendingJumpActive {
+		d.pendingJumpActive = false
+		d.pendingJumpTruncEnd = 0
+		if d.hasContentAfterCursor(data, 0) {
+			lastTruncEnd = 0
+			d.maxRowSeen = 0
+		}
+	}
+
+	// Find the last truncation sequence position
 	for i := 0; i < len(data); i++ {
 		for _, ts := range truncationSequences {
 			if !d.strategyEnabled(ts.strategy) {
@@ -100,21 +120,32 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 			}
 			if i+len(ts.seq) <= len(data) && bytes.Equal(data[i:i+len(ts.seq)], ts.seq) {
 				if ts.strategy == "cursor_home" {
+					if d.lastCursorHomePos >= 0 && i-d.lastCursorHomePos < cursorHomeCooldownBytes {
+						continue
+					}
 					if !d.checkCursorHomeHeuristic(data, i) {
 						continue
 					}
+					d.lastCursorHomePos = i
 				}
 				lastTruncEnd = i + len(ts.seq)
 				d.maxRowSeen = 0
 			}
 		}
 
-		// Cursor jump-to-top detection
-		if d.strategy.CursorJumpTop && data[i] == 0x1B {
+		// Cursor jump-to-top detection with look-ahead
+		if d.strategy.CursorJumpTop && !d.snapshotMode && data[i] == 0x1B {
 			if row, end, ok := parseCursorRow(data, i); ok {
 				if row <= 2 && d.maxRowSeen >= cursorJumpTopThreshold {
-					lastTruncEnd = end
-					d.maxRowSeen = 0
+					if d.hasContentAfterCursor(data, end) {
+						lastTruncEnd = end
+						d.maxRowSeen = 0
+					} else if end >= len(data)-maxSequenceLen {
+						// Near end of chunk, can't decide yet: defer to next chunk
+						d.pendingJumpTruncEnd = end
+						d.pendingJumpActive = true
+					}
+					// else: only cursor control sequences follow, not a new frame
 				} else if row > d.maxRowSeen {
 					d.maxRowSeen = row
 				}
@@ -181,7 +212,7 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 	// Check size cap (priority 4) - only if frame boundary was seen recently
 	// This prevents breaking hybrid TUI apps (btm, etc.) that send frames once at startup
 	// then switch to incremental updates
-	if d.strategy.MaxSize > 0 && hadRecentFrame && d.bufferSize > d.strategy.MaxSize {
+	if d.strategy.MaxSize > 0 && !d.snapshotMode && hadRecentFrame && d.bufferSize > d.strategy.MaxSize {
 		d.bufferSize = len(data)
 		d.bytesSinceLastFrame = len(data)
 		return DetectResult{
@@ -206,12 +237,16 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 }
 
 // strategyEnabled checks if the given strategy type is enabled.
+// All strategies are disabled during snapshot mode.
 func (d *FrameDetector) strategyEnabled(strategy string) bool {
+	if d.snapshotMode {
+		return false
+	}
 	switch strategy {
 	case "screen_clear":
 		return d.strategy.ScreenClear
 	case "sync_mode":
-		return d.strategy.SyncMode && !d.snapshotMode
+		return d.strategy.SyncMode
 	case "cursor_home":
 		return d.strategy.CursorHome
 	case "cursor_jump_top":
@@ -222,8 +257,9 @@ func (d *FrameDetector) strategyEnabled(strategy string) bool {
 }
 
 // SetSnapshotMode enables or disables snapshot mode.
-// When enabled, sync_mode truncation is suppressed so partial redraws
-// within sync boundaries accumulate into a complete frame.
+// When enabled, ALL truncation strategies are suppressed (screen_clear,
+// sync_mode, cursor_home, CursorJumpTop, MaxSize). The settle timer
+// determines frame completion during snapshot, not frame detection.
 func (d *FrameDetector) SetSnapshotMode(enabled bool) {
 	d.snapshotMode = enabled
 }
@@ -261,6 +297,48 @@ func (d *FrameDetector) checkCursorHomeHeuristic(data []byte, pos int) bool {
 	return false
 }
 
+// hasContentAfterCursor scans forward from pos in data (up to jumpLookAheadLen bytes)
+// to determine if printable content follows. Skips escape sequences (colors, modes,
+// cursor control). Returns true if printable content is found, false if only
+// cursor control / DEC private mode sequences follow.
+func (d *FrameDetector) hasContentAfterCursor(data []byte, pos int) bool {
+	limit := pos + jumpLookAheadLen
+	if limit > len(data) {
+		limit = len(data)
+	}
+	j := pos
+	for j < limit {
+		if data[j] == 0x1B {
+			// Skip escape sequences
+			if j+1 < limit && data[j+1] == '[' {
+				// CSI sequence: ESC[ ... terminator
+				k := j + 2
+				for k < limit && !isCSITerminator(data[k]) {
+					k++
+				}
+				if k < limit {
+					k++ // skip terminator
+				}
+				j = k
+				continue
+			}
+			// Other ESC sequences (ESC + one char, or ESC( / ESC))
+			if j+2 < limit && (data[j+1] == '(' || data[j+1] == ')' || data[j+1] == '#') {
+				j += 3
+				continue
+			}
+			j += 2
+			continue
+		}
+		// Printable character found (not ESC, not control)
+		if data[j] >= 0x20 && data[j] != 0x7F {
+			return true
+		}
+		j++
+	}
+	return false
+}
+
 // Reset clears all detector state (pending buffer, heuristics, counters).
 // Use before triggering a fresh TUI redraw (e.g., snapshot resize cycle).
 func (d *FrameDetector) Reset() {
@@ -270,6 +348,9 @@ func (d *FrameDetector) Reset() {
 	d.bytesSinceLastFrame = 0
 	d.seenFrame = false
 	d.maxRowSeen = 0
+	d.pendingJumpActive = false
+	d.pendingJumpTruncEnd = 0
+	d.lastCursorHomePos = -1
 }
 
 // ResetBufferSize resets the buffer size tracker (call after external truncation).
@@ -368,7 +449,7 @@ func parseCursorRow(data []byte, i int) (row int, endIndex int, ok bool) {
 		}
 	}
 
-	if data[j] == 'H' || data[j] == 'F' {
+	if data[j] == 'H' || data[j] == 'F' || data[j] == 'f' {
 		if !hasRow {
 			row = 1 // ESC[H defaults to row 1
 		}

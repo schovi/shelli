@@ -45,9 +45,9 @@ shelli provides persistent interactive shell sessions via PTY-backed processes m
 
 **Utilities** (`internal/`)
 - `wait/`: Output polling with settle-time and pattern-matching modes
-- `ansi/`: ANSI escape code stripping, TUI frame detection, terminal query responses
-  - `strip.go`: ANSI escape code removal with virtual screen buffer for cursor-positioned layout
-  - `clear.go`: `FrameDetector` for TUI mode (screen clear, sync mode, cursor home, size cap)
+- `ansi/`: ANSI escape code stripping, TUI frame detection, terminal query responses (see `docs/TUI.md` for details)
+  - `strip.go`: ANSI escape code removal with rune-based virtual screen buffer supporting cursor positioning, relative movement (A/B/C/D), erase line (K), DEC Special Graphics charset, and newline-based grid sizing
+  - `clear.go`: `FrameDetector` for TUI mode (screen clear, sync mode, cursor home with cooldown, CursorJumpTop with look-ahead, size cap). Snapshot mode suppresses ALL truncation strategies.
   - `responder.go`: `TerminalResponder` intercepts DA1/DA2/DSR/Kitty queries and writes responses to PTY
 - `escape/`: Escape sequence interpretation for raw mode
 
@@ -104,5 +104,6 @@ When making changes, keep documentation in sync across these files:
 | New internal component | CLAUDE.md |
 | Plugin behavior change | `.claude/skills/shelli-auto-detector/SKILL.md` |
 | CLI/MCP interface change | `.claude/skills/tui-test/SKILL.md` (update test protocol, app registry, and commands to match new interface) |
+| TUI behavior change | `docs/TUI.md`, CLAUDE.md |
 
 **Rule**: After any feature or architecture change, update CLAUDE.md to reflect the current state. CLAUDE.md should always accurately describe the codebase structure.

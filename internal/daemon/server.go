@@ -620,6 +620,18 @@ func (s *Server) handleSnapshot(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
 	}
 
+	// Cold start: if storage is empty, wait up to 2s for the app to produce initial content.
+	// This handles the case where snapshot is called before the app has rendered anything.
+	if sz, _ := storage.Size(req.Name); sz == 0 {
+		coldDeadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(coldDeadline) {
+			time.Sleep(SnapshotPollInterval)
+			if sz, _ := storage.Size(req.Name); sz > 0 {
+				break
+			}
+		}
+	}
+
 	// Clear storage and reset frame detector before resize cycle.
 	// This ensures the settle loop starts from size=0 and waits for fresh data,
 	// preventing races where captureOutput's Clear+Append can be seen as empty.

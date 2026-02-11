@@ -292,7 +292,7 @@ Fast redraw, charts, box drawing, periodic updates. Snapshot should always get a
 - **Launch**: `glances`
 - **Key test**: Send `1` (toggle per-CPU stats)
 - **Expected change**: CPU section expands/collapses
-- **Notes**: Multi-panel dashboard. Python-based TUI.
+- **Notes**: Multi-panel dashboard. Python-based TUI. Use `--settle 3000` for consistency test.
 
 #### k9s
 
@@ -301,7 +301,7 @@ Fast redraw, charts, box drawing, periodic updates. Snapshot should always get a
 - **Key test**: Send `:` then `namespace\r` (command mode)
 - **Expected change**: Namespace view opens
 - **Prereq**: Needs a working kubeconfig. If no k8s cluster available, SKIP with note.
-- **Notes**: Uses tcell. Complex keybinds. May error without cluster.
+- **Notes**: Uses tcell. Complex keybinds. May error without cluster. Left-side columns may be truncated in strip-ansi snapshots.
 
 ### Category: File Managers
 
@@ -313,7 +313,7 @@ Lists, previews, navigation keys. Test arrow keys and cursor movement.
 - **Launch**: `ranger`
 - **Key test**: Send `j` twice then `k` once (down, down, up)
 - **Expected change**: File selection cursor moves
-- **Notes**: Three-column layout. Preview pane. Python-based.
+- **Notes**: Three-column layout. Preview pane. Python-based. Works after snapshot truncation suppression fix.
 
 #### nnn
 
@@ -329,7 +329,7 @@ Lists, previews, navigation keys. Test arrow keys and cursor movement.
 - **Launch**: `yazi`
 - **Key test**: Send `j` (down)
 - **Expected change**: Selection moves to next file
-- **Notes**: Rust-based, modern file manager. Rich UI with preview.
+- **Notes**: Rust-based, modern file manager. Rich UI with preview. Only right pane renders in strip-ansi.
 
 #### vifm
 
@@ -370,7 +370,7 @@ Modal input, scrolling, search. These stress different aspects of TUI handling.
 - **Key test**: Send `:set number\r` (turn on line numbers)
 - **Expected change**: Line numbers appear in left gutter
 - **Setup**: Before create, write a test file: `echo "line1\nline2\nline3\nline4\nline5" > /tmp/shelli-test-vim.txt`
-- **Notes**: Alt screen, complex escape sequences. Good stress test for ANSI handling.
+- **Notes**: Alt screen, complex escape sequences. Works after snapshot truncation suppression fix.
 
 #### less
 
@@ -378,7 +378,7 @@ Modal input, scrolling, search. These stress different aspects of TUI handling.
 - **Launch**: `less README.md` (use repo's README)
 - **Key test**: Send `G` (jump to end of file)
 - **Expected change**: Shows end of file, status bar shows "(END)" or percentage
-- **Notes**: Simple pager. Perfect for basic scroll/key testing.
+- **Notes**: Simple pager. Strip-ansi works after newline grid sizing fix.
 
 #### micro
 
@@ -387,7 +387,7 @@ Modal input, scrolling, search. These stress different aspects of TUI handling.
 - **Key test**: Type `hello shelli` then snapshot
 - **Expected change**: Text appears in editor buffer
 - **Setup**: `touch /tmp/shelli-test-micro.txt`
-- **Notes**: Modern terminal editor. Uses tcell.
+- **Notes**: Modern terminal editor. Uses tcell. Works after snapshot truncation suppression fix.
 
 ### Category: Network / Chat
 
@@ -400,7 +400,7 @@ Async events, input + output interleaving. These may need network config.
 - **Key test**: Send `/help\r` (show help)
 - **Expected change**: Help text appears in main buffer
 - **Prereq**: No IRC server needed for basic UI test. App starts with local buffer.
-- **Notes**: Split view with input bar at bottom. Heavy on UI chrome.
+- **Notes**: Split view with input bar at bottom. Heavy on UI chrome. Timing-dependent inconsistency at larger sizes.
 
 #### irssi
 
@@ -409,7 +409,7 @@ Async events, input + output interleaving. These may need network config.
 - **Key test**: Send `/help\r` (show help)
 - **Expected change**: Help output in main window
 - **Prereq**: No server needed for basic test.
-- **Notes**: Classic IRC client. Status bar + input line.
+- **Notes**: Classic IRC client. Status bar + input line. Session instability with repeated SIGWINCH.
 
 ### Category: Email / Feeds / Misc
 
@@ -431,7 +431,7 @@ Forms, multi-pane, longer content. Some need external config.
 - **Key test**: Send `?` (help)
 - **Expected change**: Help screen shown
 - **Prereq**: Needs RSS feeds config (~/.config/newsboat/urls). Create a minimal one if missing: `echo "https://hnrss.org/frontpage" > ~/.config/newsboat/urls`
-- **Notes**: RSS reader. List-based UI.
+- **Notes**: RSS reader. List-based UI. Help screen capture may fail (8/9 score).
 
 #### mc
 
@@ -447,7 +447,7 @@ Forms, multi-pane, longer content. Some need external config.
 - **Launch**: `bat --paging=always README.md`
 - **Key test**: Send `G` (jump to end, uses less-style paging)
 - **Expected change**: Shows end of file
-- **Notes**: Syntax-highlighted pager. Wraps less internally. May behave like less for keys.
+- **Notes**: Syntax-highlighted pager. Wraps less internally. Strip-ansi works after newline grid sizing fix.
 
 ---
 

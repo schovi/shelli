@@ -864,16 +864,74 @@ func TestFrameDetector_SnapshotMode(t *testing.T) {
 		}
 	})
 
-	t.Run("screen clear still works during snapshot mode", func(t *testing.T) {
+	t.Run("screen clear suppressed during snapshot mode", func(t *testing.T) {
 		d := NewFrameDetector(DefaultTUIStrategy())
 		d.SetSnapshotMode(true)
 
 		result := d.Process([]byte("old\x1b[2Jnew"))
-		if !result.Truncate {
-			t.Error("screen clear should still truncate during snapshot mode")
+		if result.Truncate {
+			t.Error("screen clear should NOT truncate during snapshot mode")
 		}
-		if !bytes.Equal(result.DataAfter, []byte("new")) {
-			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "new")
+		expected := []byte("old\x1b[2Jnew")
+		if !bytes.Equal(result.DataAfter, expected) {
+			t.Errorf("DataAfter = %q, want full data", result.DataAfter)
+		}
+	})
+
+	t.Run("cursor home suppressed during snapshot mode", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+		d.SetSnapshotMode(true)
+
+		result := d.Process([]byte("old\x1b[0m\x1b[1;1Hnew"))
+		if result.Truncate {
+			t.Error("cursor_home should NOT truncate during snapshot mode")
+		}
+	})
+
+	t.Run("CursorJumpTop suppressed during snapshot mode", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+
+		// Build up rows to exceed threshold
+		var buf []byte
+		for r := 1; r <= 30; r++ {
+			buf = append(buf, []byte(fmt.Sprintf("\x1b[%d;1Hline content", r))...)
+		}
+		d.Process(buf)
+		d.SetSnapshotMode(true)
+
+		result := d.Process([]byte("\x1b[1;1Hnew frame"))
+		if result.Truncate {
+			t.Error("CursorJumpTop should NOT truncate during snapshot mode")
+		}
+	})
+
+	t.Run("MaxSize suppressed during snapshot mode", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+
+		// Trigger a frame boundary first (outside snapshot mode)
+		d.Process([]byte("\x1b[2Jframe"))
+		d.SetSnapshotMode(true)
+
+		// Send data exceeding MaxSize (100KB)
+		bigChunk := make([]byte, 150*1024)
+		result := d.Process(bigChunk)
+		if result.Truncate {
+			t.Error("MaxSize should NOT truncate during snapshot mode")
+		}
+	})
+
+	t.Run("vim redraw pattern: alt screen + clear + cursor home all suppressed in snapshot", func(t *testing.T) {
+		d := NewFrameDetector(DefaultTUIStrategy())
+		d.SetSnapshotMode(true)
+
+		// vim sends all three in one redraw sequence
+		result := d.Process([]byte("\x1b[?1049h\x1b[2J\x1b[Hfile contents here"))
+		if result.Truncate {
+			t.Error("vim redraw pattern should NOT truncate during snapshot mode")
+		}
+		expected := []byte("\x1b[?1049h\x1b[2J\x1b[Hfile contents here")
+		if !bytes.Equal(result.DataAfter, expected) {
+			t.Errorf("DataAfter = %q, want full data", result.DataAfter)
 		}
 	})
 
@@ -1033,6 +1091,186 @@ func TestFrameDetector_CursorJumpTop(t *testing.T) {
 		result = d.Process([]byte("Hnew frame"))
 		if !result.Truncate {
 			t.Error("completed cross-chunk cursor position should truncate")
+		}
+	})
+}
+
+func TestFrameDetector_CursorHomeCooldown(t *testing.T) {
+	t.Run("vim pattern: two cursor_home within 4096 bytes - only first fires", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		// Single chunk with two cursor_home sequences close together
+		// First: reset + cursor_home
+		// Then some content (< 4096 bytes)
+		// Second: reset + cursor_home
+		padding := make([]byte, 200)
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		var chunk []byte
+		chunk = append(chunk, []byte("old\x1b[?25l\x1b[1;1H")...) // first cursor_home
+		chunk = append(chunk, padding...)
+		chunk = append(chunk, []byte("\x1b[0m\x1b[1;1H")...) // second cursor_home (within cooldown)
+		chunk = append(chunk, []byte("final content")...)
+
+		result := d.Process(chunk)
+		if !result.Truncate {
+			t.Error("should truncate (first cursor_home)")
+		}
+		// The truncation should be at the first cursor_home, not the second
+		// (second is suppressed by cooldown)
+		expected := append([]byte{}, padding...)
+		expected = append(expected, []byte("\x1b[0m\x1b[1;1Hfinal content")...)
+		if !bytes.Equal(result.DataAfter, expected) {
+			t.Errorf("DataAfter should include data after first cursor_home (second suppressed)")
+		}
+	})
+
+	t.Run("normal multi-frame: two cursor_home 5000+ bytes apart - both fire", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		padding := make([]byte, 5000)
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		var chunk []byte
+		chunk = append(chunk, []byte("old\x1b[0m\x1b[1;1H")...) // first cursor_home
+		chunk = append(chunk, padding...)
+		chunk = append(chunk, []byte("\x1b[0m\x1b[1;1H")...) // second cursor_home (beyond cooldown)
+		chunk = append(chunk, []byte("final")...)
+
+		result := d.Process(chunk)
+		if !result.Truncate {
+			t.Error("should truncate")
+		}
+		// Both should fire, so DataAfter should be after the second cursor_home
+		if !bytes.Equal(result.DataAfter, []byte("final")) {
+			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "final")
+		}
+	})
+
+	t.Run("separate chunks: cursor_home in different Process calls both fire", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		result := d.Process([]byte("old\x1b[0m\x1b[1;1Hframe1"))
+		if !result.Truncate {
+			t.Error("first chunk should truncate")
+		}
+
+		result = d.Process([]byte("data\x1b[0m\x1b[1;1Hframe2"))
+		if !result.Truncate {
+			t.Error("second chunk should truncate (cooldown resets between Process calls)")
+		}
+	})
+
+	t.Run("Reset clears cooldown state", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		d.Process([]byte("old\x1b[0m\x1b[1;1Hcontent"))
+		d.Reset()
+
+		result := d.Process([]byte("new\x1b[0m\x1b[1;1Hcontent"))
+		if !result.Truncate {
+			t.Error("after Reset, cursor_home should work normally")
+		}
+	})
+}
+
+func TestFrameDetector_CursorJumpTopLookAhead(t *testing.T) {
+	cursorPos := func(row int) string {
+		return fmt.Sprintf("\x1b[%d;1H", row)
+	}
+
+	buildRows := func(from, to int) []byte {
+		var buf []byte
+		for r := from; r <= to; r++ {
+			buf = append(buf, []byte(cursorPos(r)+"line content")...)
+		}
+		return buf
+	}
+
+	t.Run("micro pattern: jump to top followed by cursor control only - no truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		d.Process(buildRows(1, 40))
+
+		// Jump to row 1 followed by cursor control sequences only (no printable content)
+		result := d.Process([]byte(cursorPos(1) + "\x1b[?12l\x1b[?25h"))
+		if result.Truncate {
+			t.Error("should NOT truncate when only cursor control follows jump")
+		}
+	})
+
+	t.Run("htop pattern: jump to top followed by content - truncation fires", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		d.Process(buildRows(1, 30))
+
+		result := d.Process([]byte(cursorPos(1) + "CPU usage 50%"))
+		if !result.Truncate {
+			t.Error("should truncate when content follows jump")
+		}
+		if !bytes.Equal(result.DataAfter, []byte("CPU usage 50%")) {
+			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "CPU usage 50%")
+		}
+	})
+
+	t.Run("jump followed by color then content - truncation fires", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		d.Process(buildRows(1, 20))
+
+		result := d.Process([]byte(cursorPos(1) + "\x1b[32mgreen text"))
+		if !result.Truncate {
+			t.Error("should truncate when content follows after color sequences")
+		}
+	})
+
+	t.Run("cross-chunk: jump at end of chunk, content in next - truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		d.Process(buildRows(1, 25))
+
+		// Jump at very end of chunk (near boundary)
+		result := d.Process([]byte(cursorPos(1)))
+		if result.Truncate {
+			t.Error("should not truncate yet (waiting for next chunk)")
+		}
+
+		// Next chunk has content
+		result = d.Process([]byte("new frame content"))
+		if !result.Truncate {
+			t.Error("should truncate when content arrives in next chunk")
+		}
+	})
+
+	t.Run("cross-chunk: jump at end of chunk, cursor control in next - no truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		d.Process(buildRows(1, 25))
+
+		// Jump at end of chunk
+		result := d.Process([]byte(cursorPos(1)))
+		if result.Truncate {
+			t.Error("should not truncate yet")
+		}
+
+		// Next chunk has only cursor control
+		result = d.Process([]byte("\x1b[?25h\x1b[?12l"))
+		if result.Truncate {
+			t.Error("should NOT truncate when only cursor control in next chunk")
+		}
+	})
+
+	t.Run("jump followed by another cursor positioning - no truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		d.Process(buildRows(1, 20))
+
+		// Jump to row 1 followed by another cursor position (row 5) with no content between
+		result := d.Process([]byte("\x1b[1;3H\x1b[?12l\x1b[?25h"))
+		if result.Truncate {
+			t.Error("should NOT truncate when only cursor positioning/control follows")
 		}
 	})
 }

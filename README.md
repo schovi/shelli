@@ -520,13 +520,15 @@ When enabled, shelli uses multiple detection strategies to identify frame bounda
 
 This reduces storage from ~50MB to ~2KB for typical TUI sessions.
 
-**What works:**
-- System monitors: `btop`, `htop`, `k9s`
-- Most TUIs that use standard terminal escape sequences
-- Resize with `shelli resize` updates the TUI layout
+**What works well** (9/9 test score):
+- System monitors: `btop`, `htop`, `glances`, `k9s`
+- File managers: `ranger`, `nnn`, `yazi`, `vifm`, `mc`
+- Git tools: `lazygit`, `tig`
+- Editors/viewers: `vim`, `less`, `micro`, `bat`
+- Chat clients: `weechat`, `irssi`
 
 **Limited support:**
-- Text editors (`vim`, `nano`) - display works but interaction is impractical
+- `newsboat` (8/9, help screen capture fails)
 - Apps with complex mouse/input handling may behave unexpectedly
 
 **shelli works best with:**
