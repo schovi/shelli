@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,8 +36,8 @@ func init() {
 		"Maximum output buffer size per session for memory backend (e.g., 10MB, 1GB)")
 	daemonCmd.Flags().BoolVar(&daemonMCPFlag, "mcp", false,
 		"Run as MCP server (JSON-RPC over stdio)")
-	daemonCmd.Flags().StringVar(&daemonDataDirFlag, "data-dir", "/tmp/shelli",
-		"Directory for session output files (file backend only)")
+	daemonCmd.Flags().StringVar(&daemonDataDirFlag, "data-dir", "",
+		"Directory for session output files (default: ~/.shelli/data)")
 	daemonCmd.Flags().BoolVar(&daemonMemoryBackend, "memory-backend", false,
 		"Use in-memory storage instead of file-based (no persistence)")
 	daemonCmd.Flags().StringVar(&daemonStoppedTTLFlag, "stopped-ttl", "",
@@ -49,6 +50,14 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	}
 
 	var opts []daemon.ServerOption
+
+	if daemonDataDirFlag == "" {
+		homeDir, err := os.UserHomeDir()
+		if err != nil {
+			return fmt.Errorf("get home dir: %w", err)
+		}
+		daemonDataDirFlag = filepath.Join(homeDir, ".shelli", "data")
+	}
 
 	if daemonMemoryBackend {
 		maxSize, err := parseSize(daemonMaxOutputFlag)

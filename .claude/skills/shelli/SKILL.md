@@ -162,6 +162,7 @@ Other flags:
 - `--timeout N`: Max wait time (default: 10s)
 - `--strip-ansi`: Remove ANSI escape codes
 - `--json`: Output as JSON
+- `--cursor "name"`: Named cursor for per-consumer read tracking. Each cursor maintains its own position.
 
 Examples:
 ```bash
@@ -541,6 +542,7 @@ shelli create session --cmd "command"
 - **Output buffering**: All output is buffered with position tracking
 - **Socket communication**: CLI talks to daemon via Unix socket (`~/.shelli/shelli.sock`)
 - **Max output**: Default 10MB buffer per session (configurable via daemon `--max-output`)
+- **Per-consumer cursors**: `--cursor` flag (or MCP `cursor` param) allows multiple consumers to independently track read positions on the same session
 
 ## Limitations
 

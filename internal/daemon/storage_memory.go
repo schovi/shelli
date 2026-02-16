@@ -33,8 +33,13 @@ func (s *MemoryStorage) Append(session string, data []byte) error {
 	if s.maxOutputSize > 0 && len(s.outputs[session]) > s.maxOutputSize {
 		excess := len(s.outputs[session]) - s.maxOutputSize
 		s.outputs[session] = s.outputs[session][excess:]
-		if meta, ok := s.metas[session]; ok && meta.ReadPos > 0 {
-			meta.ReadPos = max(0, meta.ReadPos-int64(excess))
+		if meta, ok := s.metas[session]; ok {
+			if meta.ReadPos > 0 {
+				meta.ReadPos = max(0, meta.ReadPos-int64(excess))
+			}
+			for k, v := range meta.Cursors {
+				meta.Cursors[k] = max(0, v-int64(excess))
+			}
 		}
 	}
 
@@ -89,6 +94,7 @@ func (s *MemoryStorage) Clear(session string) error {
 	s.outputs[session] = []byte{}
 	if meta, ok := s.metas[session]; ok {
 		meta.ReadPos = 0
+		meta.Cursors = nil
 	}
 	return nil
 }

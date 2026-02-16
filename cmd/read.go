@@ -39,6 +39,7 @@ var (
 	readFollowFlag    bool
 	readFollowMsFlag  int
 	readSnapshotFlag  bool
+	readCursorFlag    string
 )
 
 func init() {
@@ -53,6 +54,7 @@ func init() {
 	readCmd.Flags().BoolVarP(&readFollowFlag, "follow", "f", false, "Follow output continuously (like tail -f)")
 	readCmd.Flags().IntVar(&readFollowMsFlag, "follow-ms", 100, "Poll interval for --follow in milliseconds")
 	readCmd.Flags().BoolVar(&readSnapshotFlag, "snapshot", false, "Force TUI redraw and read clean frame (TUI sessions only)")
+	readCmd.Flags().StringVar(&readCursorFlag, "cursor", "", "Named cursor for per-consumer read tracking")
 }
 
 func runRead(cmd *cobra.Command, args []string) error {
@@ -120,23 +122,35 @@ func runRead(cmd *cobra.Command, args []string) error {
 		}
 
 		output, pos, err = wait.ForOutput(
-			func() (string, int, error) { return client.Read(name, "all", headLines, tailLines) },
+			func() (string, int, error) { return client.Read(name, "all", 0, 0) },
 			wait.Config{
 				Pattern:       readWaitFlag,
 				SettleMs:      readSettleFlag,
 				TimeoutSec:    readTimeoutFlag,
 				StartPosition: startPos,
+				SizeFunc:      func() (int, error) { return client.Size(name) },
 			},
 		)
 		if err == nil {
-			client.Read(name, "new", 0, 0)
+			if headLines > 0 || tailLines > 0 {
+				output = daemon.LimitLines(output, headLines, tailLines)
+			}
+			if readCursorFlag != "" {
+				client.ReadWithCursor(name, "new", readCursorFlag, 0, 0)
+			} else {
+				client.Read(name, "new", 0, 0)
+			}
 		}
 	} else {
 		mode := daemon.ReadModeNew
 		if readAllFlag || readHeadFlag > 0 || readTailFlag > 0 {
 			mode = daemon.ReadModeAll
 		}
-		output, pos, err = client.Read(name, mode, headLines, tailLines)
+		if readCursorFlag != "" {
+			output, pos, err = client.ReadWithCursor(name, mode, readCursorFlag, headLines, tailLines)
+		} else {
+			output, pos, err = client.Read(name, mode, headLines, tailLines)
+		}
 	}
 
 	if err != nil {

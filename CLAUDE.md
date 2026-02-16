@@ -41,7 +41,7 @@ shelli provides persistent interactive shell sessions via PTY-backed processes m
 
 **CLI** (`cmd/`)
 - Cobra commands wrapping client calls
-- Commands: create, exec, send, read, list, stop, kill, search, version, daemon
+- Commands: create, exec, send, read, list, stop, kill, search, cursor, version, daemon
 
 **Utilities** (`internal/`)
 - `wait/`: Output polling with settle-time and pattern-matching modes
@@ -61,6 +61,8 @@ CLI/MCP → daemon.Client → Unix socket → daemon.Server → PTY → subproce
                                         └─ FileStorage (persistent)
 ```
 
+PTY sessions accessible via both MCP and CLI, with optional size-based poll optimization. Additional endpoints: `size` (lightweight buffer size check for poll optimization)
+
 ### Key Design Decisions
 
 - **Daemon holds state**: PTY file descriptors can't be passed across processes, so a long-running daemon is required
@@ -74,6 +76,8 @@ CLI/MCP → daemon.Client → Unix socket → daemon.Server → PTY → subproce
 - **TUI mode**: `--tui` flag enables frame detection with multiple strategies (screen clear, sync mode, cursor home, size cap) to auto-truncate buffer for TUI apps
 - **Snapshot read**: `--snapshot` on read clears storage and resets the frame detector, then triggers a resize cycle (SIGWINCH) to force a full TUI redraw, waits for settle, then reads the clean frame. Pre-clearing prevents races between captureOutput and the settle loop. Requires TUI mode.
 - **Terminal responder**: TUI sessions get a `TerminalResponder` that intercepts terminal capability queries (DA1, DA2, Kitty keyboard, DECRPM) in PTY output and writes responses to PTY input. Unblocks apps like yazi that block on unanswered queries.
+- **Per-consumer cursors**: Optional `cursor` parameter on read operations. Each named cursor tracks its own read position, allowing multiple consumers to tail the same session independently. Without a cursor, the global `ReadPos` is used (backward compatible).
+- **Size endpoint**: Lightweight `size` action returns output buffer size without transferring content. Used by wait polling to skip expensive full reads when nothing changed.
 
 ## Claude Plugin
 

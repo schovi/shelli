@@ -86,6 +86,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 			SettleMs:      settleMs,
 			TimeoutSec:    execTimeoutFlag,
 			StartPosition: startPos,
+			SizeFunc:      func() (int, error) { return client.Size(name) },
 		},
 	)
 	if err != nil {
