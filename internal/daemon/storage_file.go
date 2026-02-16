@@ -41,10 +41,10 @@ func (s *FileStorage) Append(session string, data []byte) error {
 	}
 	defer f.Close()
 
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil { // #nosec G115 -- f.Fd() returns a valid file descriptor, overflow not possible
 		return fmt.Errorf("lock file: %w", err)
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN) // #nosec G115
 
 	if _, err := f.Write(data); err != nil {
 		return fmt.Errorf("write output: %w", err)

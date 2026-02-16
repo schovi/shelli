@@ -323,9 +323,9 @@ func (s *Server) handleCreate(req Request) Response {
 
 	var cmd *exec.Cmd
 	if strings.Contains(command, " ") {
-		cmd = exec.Command("sh", "-c", command)
+		cmd = exec.Command("sh", "-c", command) // #nosec G702 -- executing user-provided commands is the core feature
 	} else {
-		cmd = exec.Command(command)
+		cmd = exec.Command(command) // #nosec G702 -- executing user-provided commands is the core feature
 	}
 
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
@@ -649,15 +649,15 @@ func (s *Server) handleSnapshot(req Request) Response {
 		s.mu.Unlock()
 	}()
 
-	tempCols := uint16(meta.Cols) + 1
-	tempRows := uint16(meta.Rows) + 1
+	tempCols := clampUint16(meta.Cols + 1)
+	tempRows := clampUint16(meta.Rows + 1)
 	pty.Setsize(ptmx, &pty.Winsize{Cols: tempCols, Rows: tempRows})
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Signal(syscall.SIGWINCH)
 	}
 	time.Sleep(SnapshotResizePause)
 
-	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(meta.Cols), Rows: uint16(meta.Rows)}); err != nil {
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: clampUint16(meta.Cols), Rows: clampUint16(meta.Rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize for snapshot: %v", err)}
 	}
 	if cmd != nil && cmd.Process != nil {
@@ -1036,7 +1036,7 @@ func (s *Server) handleResize(req Request) Response {
 		rows = meta.Rows
 	}
 
-	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: clampUint16(cols), Rows: clampUint16(rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize: %v", err)}
 	}
 
@@ -1058,4 +1058,14 @@ func (s *Server) handleResize(req Request) Response {
 		"cols": cols,
 		"rows": rows,
 	}}
+}
+
+func clampUint16(v int) uint16 {
+	if v < 0 {
+		return 0
+	}
+	if v > 65535 {
+		return 65535
+	}
+	return uint16(v)
 }
