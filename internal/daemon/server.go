@@ -651,7 +651,9 @@ func (s *Server) handleSnapshot(req Request) Response {
 
 	tempCols := clampUint16(meta.Cols + 1)
 	tempRows := clampUint16(meta.Rows + 1)
-	pty.Setsize(ptmx, &pty.Winsize{Cols: tempCols, Rows: tempRows})
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: tempCols, Rows: tempRows}); err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("temporary resize for snapshot: %v", err)}
+	}
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Signal(syscall.SIGWINCH)
 	}

@@ -44,6 +44,7 @@ func TestInterpret_UnknownSequences(t *testing.T) {
 		{"slash", `\/`, "/"},
 		{"at sign", `\@`, "@"},
 		{"hash", `\#`, "#"},
+		{"multi-byte UTF-8 after backslash", `\é`, "é"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

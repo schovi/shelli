@@ -8,7 +8,7 @@ import (
 )
 
 var ansiPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`),             // CSI sequences (colors, cursor, etc)
+	regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z~]`),            // CSI sequences (colors, cursor, etc)
 	regexp.MustCompile(`\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)`), // OSC sequences
 	regexp.MustCompile(`\x1b[()][AB012]`),                    // Character set selection
 	regexp.MustCompile(`\x1b[=>]`),                           // Keypad modes
@@ -455,7 +455,7 @@ func parseEraseDisplay(s string, i int) (mode, end int, ok bool) {
 }
 
 func isCSITerminator(c byte) bool {
-	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '@' || c == '`'
+	return c >= 0x40 && c <= 0x7E
 }
 
 // hasPrintableAhead checks if printable content follows within maxBytes,

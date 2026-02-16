@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Interpret processes escape sequences in a string.
@@ -82,8 +83,9 @@ func Interpret(s string) (string, error) {
 			i += 2
 
 		default:
-			result.WriteByte(s[i+1])
-			i += 2
+			r, size := utf8.DecodeRuneInString(s[i+1:])
+			result.WriteRune(r)
+			i += 1 + size
 		}
 	}
 

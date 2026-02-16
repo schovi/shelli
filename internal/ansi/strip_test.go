@@ -345,6 +345,21 @@ func TestStrip(t *testing.T) {
 			input:    "\x1b[1;1Hhello world\x1b[2;1Hrow2\x1b[1;6H\x1b[1J",
 			expected: "      world\nrow2",
 		},
+		{
+			name:     "function key escape sequences",
+			input:    "before\x1b[15~after",
+			expected: "beforeafter",
+		},
+		{
+			name:     "delete key escape sequence",
+			input:    "text\x1b[3~more",
+			expected: "textmore",
+		},
+		{
+			name:     "cursor positioning with tilde-terminated sequences mixed in",
+			input:    "\x1b[1;1H\x1b[15~hello",
+			expected: "hello",
+		},
 	}
 
 	for _, tt := range tests {

@@ -1274,6 +1274,17 @@ func TestFrameDetector_CursorJumpTopLookAhead(t *testing.T) {
 			t.Error("should NOT truncate when only cursor positioning/control follows")
 		}
 	})
+
+	t.Run("jump followed by tilde-terminated CSI then content - truncation fires", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorJumpTop: true})
+
+		d.Process(buildRows(1, 20))
+
+		result := d.Process([]byte(cursorPos(1) + "\x1b[15~hello world"))
+		if !result.Truncate {
+			t.Error("should truncate when content follows after tilde-terminated sequence")
+		}
+	})
 }
 
 func TestFrameDetector_CursorHomeLookAhead(t *testing.T) {
