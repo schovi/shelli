@@ -10,6 +10,10 @@ const (
 	DaemonPollInterval   = 100 * time.Millisecond
 	DefaultMaxOutputSize = 10 * 1024 * 1024 // 10 MB
 
+	DefaultSnapshotSettleMs = 300
+	SnapshotPollInterval    = 25 * time.Millisecond
+	SnapshotResizePause     = 200 * time.Millisecond
+
 	ReadModeNew = "new"
 	ReadModeAll = "all"
 )

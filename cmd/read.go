@@ -38,6 +38,7 @@ var (
 	readJsonFlag      bool
 	readFollowFlag    bool
 	readFollowMsFlag  int
+	readSnapshotFlag  bool
 )
 
 func init() {
@@ -51,6 +52,7 @@ func init() {
 	readCmd.Flags().BoolVar(&readJsonFlag, "json", false, "Output as JSON")
 	readCmd.Flags().BoolVarP(&readFollowFlag, "follow", "f", false, "Follow output continuously (like tail -f)")
 	readCmd.Flags().IntVar(&readFollowMsFlag, "follow-ms", 100, "Poll interval for --follow in milliseconds")
+	readCmd.Flags().BoolVar(&readSnapshotFlag, "snapshot", false, "Force TUI redraw and read clean frame (TUI sessions only)")
 }
 
 func runRead(cmd *cobra.Command, args []string) error {
@@ -83,6 +85,13 @@ func runRead(cmd *cobra.Command, args []string) error {
 	}
 	if hasWait && hasSettle {
 		return fmt.Errorf("--wait and --settle are mutually exclusive")
+	}
+
+	if readSnapshotFlag {
+		if readFollowFlag || readAllFlag || hasWait {
+			return fmt.Errorf("--snapshot cannot be combined with --follow, --all, or --wait")
+		}
+		return runReadSnapshot(name)
 	}
 
 	if readFollowFlag {
@@ -155,6 +164,39 @@ func runRead(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func runReadSnapshot(name string) error {
+	client := daemon.NewClient()
+	if err := client.EnsureDaemon(); err != nil {
+		return fmt.Errorf("daemon: %w", err)
+	}
+
+	settleMs := readSettleFlag
+	output, pos, err := client.Snapshot(name, settleMs, readTimeoutFlag, readHeadFlag, readTailFlag)
+	if err != nil {
+		return err
+	}
+
+	if readStripAnsiFlag {
+		output = ansi.Strip(output)
+	}
+
+	if readJsonFlag {
+		out := map[string]interface{}{
+			"output":   output,
+			"position": pos,
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal output: %w", err)
+		}
+		fmt.Println(string(data))
+	} else {
+		fmt.Print(output)
+	}
+
+	return nil
+}
+
 func runReadFollow(name string) error {
 	client := daemon.NewClient()
 	if err := client.EnsureDaemon(); err != nil {
@@ -171,6 +213,9 @@ func runReadFollow(name string) error {
 		cancel()
 	}()
 
+	if readFollowMsFlag <= 0 {
+		readFollowMsFlag = 100
+	}
 	pollInterval := time.Duration(readFollowMsFlag) * time.Millisecond
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()

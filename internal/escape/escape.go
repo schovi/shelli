@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // Interpret processes escape sequences in a string.
@@ -15,6 +16,9 @@ import (
 //	\t         - Tab
 //	\e         - Escape (ASCII 27)
 //	\\         - Literal backslash
+//
+// Unrecognized escape sequences pass through literally (backslash is dropped).
+// For example, \! becomes !, \? becomes ?.
 //
 // Common control characters:
 //
@@ -79,7 +83,9 @@ func Interpret(s string) (string, error) {
 			i += 2
 
 		default:
-			return "", fmt.Errorf("unknown escape sequence \\%c at position %d", s[i+1], i)
+			r, size := utf8.DecodeRuneInString(s[i+1:])
+			result.WriteRune(r)
+			i += 1 + size
 		}
 	}
 

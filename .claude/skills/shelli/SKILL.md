@@ -35,7 +35,7 @@ Use shelli instead of regular Bash when you need:
 Do NOT use shelli for:
 - One-off commands that don't need state (`ls`, `cat file.txt`, `git status`)
 - Commands that complete immediately and don't require follow-up
-- TUI applications (vim, htop, k9s) - they don't produce line-based output
+- TUI applications (vim, htop, k9s) without `--tui` flag and `--follow` mode (see TUI Applications section in Limitations)
 
 ## Commands Reference
 
@@ -51,6 +51,7 @@ Flags:
 - `--cwd /path`: Set working directory
 - `--cols N`: Terminal columns (default: 80)
 - `--rows N`: Terminal rows (default: 24)
+- `--tui`: Enable TUI mode (auto-truncate buffer on frame boundaries)
 - `--json`: Output session info as JSON
 
 Examples:
@@ -63,6 +64,7 @@ shelli create server --cmd "ssh user@host"   # SSH session
 shelli create redis --cmd "redis-cli"        # Redis CLI
 shelli create dev --env "DEBUG=1" --cwd /app # with env and working dir
 shelli create wide --cols 200 --rows 50      # large terminal
+shelli create vim --cmd "vim" --tui          # TUI mode for editors
 ```
 
 ### exec - Send command and wait for result (primary command for AI)
@@ -147,6 +149,11 @@ shelli read <name> [flags]
 - `--follow` / `-f`: Continuous output like `tail -f`
 - `--follow-ms N`: Poll interval in ms (default: 100)
 
+**Snapshot mode** (TUI only):
+- `--snapshot`: Force full redraw via resize, wait for settle, read clean frame
+  - Requires `--tui` on create. Incompatible with `--follow`, `--all`, `--wait`.
+  - Compatible with `--settle` (overrides default 300ms), `--strip-ansi`, `--json`, `--head`, `--tail`, `--timeout`.
+
 **Blocking modes**:
 - `--wait "pattern"`: Wait for regex pattern match
 - `--settle N`: Wait for N ms of silence
@@ -164,6 +171,8 @@ shelli read myshell --follow           # stream continuously (Ctrl+C to stop)
 shelli read pyrepl --wait ">>>"        # wait for Python prompt
 shelli read myshell --settle 300       # wait for 300ms silence
 shelli read myshell --strip-ansi       # clean output
+shelli read tui-app --snapshot --strip-ansi       # clean TUI frame
+shelli read tui-app --snapshot --tail 10          # last 10 lines of TUI
 ```
 
 ### list - List all sessions
@@ -537,13 +546,29 @@ shelli create session --cmd "command"
 
 ### TUI Applications - Now Supported
 
-shelli supports TUI applications using `--follow` mode for continuous streaming:
+shelli supports TUI applications using `--follow` mode for continuous streaming, `--tui` mode for reduced storage, and `--snapshot` for clean frame capture:
 
 ```bash
-shelli create mon --cmd "btop"
+shelli create mon --cmd "btop" --tui
 shelli read mon --follow              # streams output, renders TUI
-shelli resize mon --cols 150 --rows 50  # resize works too
+shelli read mon --snapshot --strip-ansi  # force redraw, get clean frame
+shelli resize mon --cols 150 --rows 50   # resize works too
 ```
+
+**TUI Mode (`--tui` flag):**
+
+When enabled, shelli uses multiple detection strategies to identify frame boundaries:
+
+| Strategy | Trigger | Coverage |
+|----------|---------|----------|
+| Screen clear | ESC[2J, ESC[?1049h, ESC c | vim, less, nano |
+| Sync mode | ESC[?2026h (begin) | Claude Code, modern terminals |
+| Cursor home | ESC[1;1H (with reset) | k9s, btm, htop |
+| Size cap | Buffer > 100KB after frame | Fallback after frame detection |
+
+This reduces storage from ~50MB to ~2KB for typical TUI sessions.
+
+Use `--tui` for apps that frequently redraw the screen (vim, htop, btop, k9s). Do not use for apps where you need to preserve scrollback history.
 
 **What works well:**
 - System monitors: `btop`, `htop`, `k9s`

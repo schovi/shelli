@@ -164,3 +164,61 @@ func TestForOutput_StartPositionExceedsOutput_NoPanic(t *testing.T) {
 		t.Errorf("expected position 100, got %d", pos)
 	}
 }
+
+func TestForOutput_PositionRegression_Settle(t *testing.T) {
+	callCount := 0
+	readFn := func() (string, int, error) {
+		callCount++
+		if callCount <= 2 {
+			return strings.Repeat("x", 1000), 1000, nil
+		}
+		return "new content after truncation", 20, nil
+	}
+
+	cfg := Config{
+		SettleMs:      50,
+		TimeoutSec:    2,
+		StartPosition: 1000,
+		PollInterval:  10 * time.Millisecond,
+	}
+
+	got, pos, err := ForOutput(readFn, cfg)
+	if err != nil {
+		t.Fatalf("expected success after position regression, got error: %v", err)
+	}
+	if pos != 20 {
+		t.Errorf("expected position 20, got %d", pos)
+	}
+	if got != "new content after truncation" {
+		t.Errorf("expected truncated output, got %q", got)
+	}
+}
+
+func TestForOutput_PositionRegression_Pattern(t *testing.T) {
+	callCount := 0
+	readFn := func() (string, int, error) {
+		callCount++
+		if callCount <= 2 {
+			return strings.Repeat("x", 1000), 1000, nil
+		}
+		return "prompt> ready", 13, nil
+	}
+
+	cfg := Config{
+		Pattern:       "ready",
+		TimeoutSec:    2,
+		StartPosition: 1000,
+		PollInterval:  10 * time.Millisecond,
+	}
+
+	got, pos, err := ForOutput(readFn, cfg)
+	if err != nil {
+		t.Fatalf("expected pattern match after position regression, got error: %v", err)
+	}
+	if pos != 13 {
+		t.Errorf("expected position 13, got %d", pos)
+	}
+	if !strings.Contains(got, "ready") {
+		t.Errorf("expected output containing 'ready', got %q", got)
+	}
+}

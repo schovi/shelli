@@ -122,6 +122,7 @@ Flags:
 - `--cwd /path` - Set working directory
 - `--cols N` - Terminal columns (default: 80)
 - `--rows N` - Terminal rows (default: 24)
+- `--tui` - Enable TUI mode (auto-truncate buffer on frame boundaries)
 - `--json` - Output as JSON
 
 Examples:
@@ -132,6 +133,7 @@ shelli create db --cmd "psql -d mydb"        # PostgreSQL
 shelli create server --cmd "ssh user@host"   # SSH session
 shelli create dev --env "DEBUG=1" --cwd /app # with env and cwd
 shelli create wide --cols 200 --rows 50      # large terminal
+shelli create vim --cmd "vim" --tui          # TUI mode for editors
 ```
 
 ### exec
@@ -214,12 +216,16 @@ shelli read <name> [flags]
 - `--follow` / `-f` - Continuous output like `tail -f` (great for TUIs)
 - `--follow-ms N` - Poll interval in milliseconds (default: 100)
 
+**Snapshot mode** (TUI only):
+- `--snapshot` - Force a full redraw via resize, wait for settle, read clean frame
+
 **Blocking modes** (returns new output):
 - `--wait "pattern"` - Wait for regex pattern match
 - `--settle N` - Wait for N ms of silence
 
 Other flags:
 - `--timeout N` - Max wait time in seconds (default: 10)
+- `--settle N` - Override default settle time (300ms for snapshot, used with --wait/--settle modes)
 - `--strip-ansi` - Remove terminal escape codes
 - `--json` - Output as JSON
 
@@ -229,6 +235,7 @@ shelli read myshell                    # new output, instant
 shelli read myshell --all              # all output, instant
 shelli read pyrepl --wait ">>>"        # wait for Python prompt
 shelli read myshell --settle 300       # wait for 300ms silence
+shelli read tui-app --snapshot --strip-ansi  # clean TUI frame
 ```
 
 ### search
@@ -492,27 +499,43 @@ shelli kill py
 
 ### TUI Applications
 
-shelli now supports TUI applications using `--follow` mode:
+shelli supports TUI applications using `--follow` mode, `--tui` mode for buffer management, and `--snapshot` for clean frame capture:
 
 ```bash
-shelli create tui --cmd "btop"
-shelli read tui --follow          # streams output continuously
+shelli create mon --cmd "btop" --tui   # TUI mode auto-truncates buffer
+shelli read mon --follow               # streams output continuously
+shelli read mon --snapshot --strip-ansi  # force redraw, get clean frame
 ```
 
-**What works:**
-- System monitors: `btop`, `htop`, `k9s`
-- Most TUIs that use standard terminal escape sequences
-- Resize with `shelli resize` updates the TUI layout
+**TUI Mode (`--tui` flag):**
 
-**Limited support:**
-- Text editors (`vim`, `nano`) - display works but interaction is impractical
-- Apps with complex mouse/input handling may behave unexpectedly
+When enabled, shelli uses multiple detection strategies to identify frame boundaries and truncate old content:
+
+| Strategy | Trigger | Apps |
+|----------|---------|------|
+| Screen clear | ESC[2J, ESC[?1049h, ESC c | vim, less, nano |
+| Sync mode | ESC[?2026h (begin) | Claude Code, modern terminals |
+| Cursor home | ESC[1;1H (with reset) | k9s, btm, htop |
+| Size cap | Buffer > 100KB after frame | Fallback after frame detection |
+
+This reduces storage from ~50MB to ~2KB for typical TUI sessions.
+
+**What works well** (9/9 test score):
+- System monitors: `btop`, `htop`, `glances`, `k9s`
+- File managers: `ranger`, `nnn`, `yazi`, `vifm`, `mc`
+- Git tools: `lazygit`, `tig`
+- Editors/viewers: `vim`, `less`, `micro`, `bat`
+- Chat clients: `weechat`, `irssi`, `newsboat`
+
+See [docs/TUI.md](docs/TUI.md) for detailed TUI internals, app compatibility, and known limitations.
+
+Apps with complex mouse/input handling may behave unexpectedly.
 
 **shelli works best with:**
 - REPLs (Python, Node, Ruby, etc.)
 - Database CLIs (psql, mysql, sqlite3)
 - SSH sessions
-- TUI monitors and dashboards (with `--follow`)
+- TUI monitors and dashboards (with `--follow` and `--tui`)
 
 ## Development
 

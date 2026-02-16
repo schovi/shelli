@@ -36,14 +36,16 @@ type SessionInfo struct {
 }
 
 type Server struct {
-	mu        sync.Mutex
-	sessions  map[string]*Session
-	ptys      map[string]*os.File
-	cmds      map[string]*exec.Cmd
-	doneChans map[string]chan struct{}
-	socketDir string
-	storage   OutputStorage
-	listener  net.Listener
+	mu             sync.Mutex
+	sessions       map[string]*Session
+	ptys           map[string]*os.File
+	cmds           map[string]*exec.Cmd
+	doneChans      map[string]chan struct{}
+	frameDetectors map[string]*ansi.FrameDetector
+	responders     map[string]*ansi.TerminalResponder
+	socketDir      string
+	storage        OutputStorage
+	listener       net.Listener
 
 	stoppedTTL      time.Duration
 	cleanupStopChan chan struct{}
@@ -88,6 +90,8 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 		ptys:            make(map[string]*os.File),
 		cmds:            make(map[string]*exec.Cmd),
 		doneChans:       make(map[string]chan struct{}),
+		frameDetectors:  make(map[string]*ansi.FrameDetector),
+		responders:      make(map[string]*ansi.TerminalResponder),
 		socketDir:       socketDir,
 		storage:         NewMemoryStorage(DefaultMaxOutputSize),
 		cleanupStopChan: make(chan struct{}),
@@ -241,6 +245,10 @@ type Request struct {
 	Rows       int      `json:"rows,omitempty"`
 	Env        []string `json:"env,omitempty"`
 	Cwd        string   `json:"cwd,omitempty"`
+	TUIMode    bool     `json:"tui_mode,omitempty"`
+	Snapshot   bool     `json:"snapshot,omitempty"`
+	SettleMs   int      `json:"settle_ms,omitempty"`
+	TimeoutSec int      `json:"timeout_sec,omitempty"`
 }
 
 type Response struct {
@@ -315,9 +323,9 @@ func (s *Server) handleCreate(req Request) Response {
 
 	var cmd *exec.Cmd
 	if strings.Contains(command, " ") {
-		cmd = exec.Command("sh", "-c", command)
+		cmd = exec.Command("sh", "-c", command) // #nosec G702 -- executing user-provided commands is the core feature
 	} else {
-		cmd = exec.Command(command)
+		cmd = exec.Command(command) // #nosec G702 -- executing user-provided commands is the core feature
 	}
 
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
@@ -351,6 +359,7 @@ func (s *Server) handleCreate(req Request) Response {
 		ReadPos:   0,
 		Cols:      cols,
 		Rows:      rows,
+		TUIMode:   req.TUIMode,
 	}
 
 	if err := s.storage.Create(req.Name, meta); err != nil {
@@ -371,6 +380,10 @@ func (s *Server) handleCreate(req Request) Response {
 	s.ptys[req.Name] = ptmx
 	s.cmds[req.Name] = cmd
 	s.doneChans[req.Name] = make(chan struct{})
+	if req.TUIMode {
+		s.frameDetectors[req.Name] = ansi.NewFrameDetector(ansi.DefaultTUIStrategy())
+		s.responders[req.Name] = ansi.NewTerminalResponder(ptmx)
+	}
 
 	go s.captureOutput(req.Name, ptmx, cmd)
 
@@ -387,7 +400,18 @@ func (s *Server) handleCreate(req Request) Response {
 func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	s.mu.Lock()
 	done := s.doneChans[name]
+	detector := s.frameDetectors[name]
+	responder := s.responders[name]
+	storage := s.storage
 	s.mu.Unlock()
+
+	if detector != nil {
+		defer func() {
+			if pending := detector.Flush(); len(pending) > 0 {
+				storage.Append(name, pending)
+			}
+		}()
+	}
 
 	buf := make([]byte, ReadBufferSize)
 	for {
@@ -400,7 +424,21 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 		ptmx.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 		n, err := ptmx.Read(buf)
 		if n > 0 {
-			s.storage.Append(name, buf[:n])
+			data := buf[:n]
+			if responder != nil {
+				data = responder.Process(data)
+			}
+			if detector != nil {
+				result := detector.Process(data)
+				if result.Truncate {
+					storage.Clear(name)
+				}
+				if len(result.DataAfter) > 0 {
+					storage.Append(name, result.DataAfter)
+				}
+			} else {
+				storage.Append(name, data)
+			}
 		}
 		if err != nil && !isTimeout(err) {
 			break
@@ -416,6 +454,8 @@ func (s *Server) captureOutput(name string, ptmx *os.File, cmd *exec.Cmd) {
 	delete(s.ptys, name)
 	delete(s.cmds, name)
 	delete(s.doneChans, name)
+	delete(s.frameDetectors, name)
+	delete(s.responders, name)
 
 	if sess, ok := s.sessions[name]; ok {
 		sess.State = StateStopped
@@ -460,6 +500,10 @@ func (s *Server) handleList() Response {
 }
 
 func (s *Server) handleRead(req Request) Response {
+	if req.Snapshot {
+		return s.handleSnapshot(req)
+	}
+
 	s.mu.Lock()
 	sess, exists := s.sessions[req.Name]
 	if !exists {
@@ -545,6 +589,178 @@ func limitLines(output string, head, tail int) string {
 	return output
 }
 
+func (s *Server) handleSnapshot(req Request) Response {
+	s.mu.Lock()
+	sess, exists := s.sessions[req.Name]
+	if !exists {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+	if sess.State != StateRunning {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q is not running (snapshot requires a running TUI session)", req.Name)}
+	}
+	_, hasFD := s.frameDetectors[req.Name]
+	if !hasFD {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q is not in TUI mode (snapshot requires --tui)", req.Name)}
+	}
+	ptmx, ok := s.ptys[req.Name]
+	if !ok {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q PTY not available", req.Name)}
+	}
+	cmd := s.cmds[req.Name]
+	storage := s.storage
+	s.mu.Unlock()
+
+	meta, err := storage.LoadMeta(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
+	}
+
+	// Cold start: if storage is empty, wait up to 2s for the app to produce initial content.
+	// This handles the case where snapshot is called before the app has rendered anything.
+	if sz, _ := storage.Size(req.Name); sz == 0 {
+		coldDeadline := time.Now().Add(2 * time.Second)
+		for time.Now().Before(coldDeadline) {
+			time.Sleep(SnapshotPollInterval)
+			if sz, _ := storage.Size(req.Name); sz > 0 {
+				break
+			}
+		}
+	}
+
+	// Clear storage and reset frame detector before resize cycle.
+	// This ensures the settle loop starts from size=0 and waits for fresh data,
+	// preventing races where captureOutput's Clear+Append can be seen as empty.
+	storage.Clear(req.Name)
+	s.mu.Lock()
+	if fd, ok := s.frameDetectors[req.Name]; ok {
+		fd.Reset()
+		fd.SetSnapshotMode(true)
+	}
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if fd, ok := s.frameDetectors[req.Name]; ok {
+			fd.SetSnapshotMode(false)
+		}
+		s.mu.Unlock()
+	}()
+
+	tempCols := clampUint16(meta.Cols + 1)
+	tempRows := clampUint16(meta.Rows + 1)
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: tempCols, Rows: tempRows}); err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("temporary resize for snapshot: %v", err)}
+	}
+	if cmd != nil && cmd.Process != nil {
+		cmd.Process.Signal(syscall.SIGWINCH)
+	}
+	time.Sleep(SnapshotResizePause)
+
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: clampUint16(meta.Cols), Rows: clampUint16(meta.Rows)}); err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("resize for snapshot: %v", err)}
+	}
+	if cmd != nil && cmd.Process != nil {
+		cmd.Process.Signal(syscall.SIGWINCH)
+	}
+
+	settleMs := req.SettleMs
+	if settleMs <= 0 {
+		settleMs = DefaultSnapshotSettleMs
+	}
+	settleDuration := time.Duration(settleMs) * time.Millisecond
+
+	timeoutSec := req.TimeoutSec
+	if timeoutSec <= 0 {
+		timeoutSec = 10
+	}
+	maxTimeout := ClientDeadline - 5*time.Second
+	timeout := time.Duration(timeoutSec) * time.Second
+	if timeout > maxTimeout {
+		timeout = maxTimeout
+	}
+
+	deadline := time.Now().Add(timeout)
+	lastChangeTime := time.Now()
+	lastSize := int64(-1)
+
+	for time.Now().Before(deadline) {
+		time.Sleep(SnapshotPollInterval)
+
+		size, err := storage.Size(req.Name)
+		if err != nil {
+			return Response{Success: false, Error: fmt.Sprintf("poll size: %v", err)}
+		}
+
+		if size != lastSize {
+			lastSize = size
+			lastChangeTime = time.Now()
+			continue
+		}
+
+		if size > 0 && time.Since(lastChangeTime) >= settleDuration {
+			break
+		}
+	}
+
+	output, err := storage.ReadAll(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+	}
+
+	// Retry once if empty and time remains: some apps need a second SIGWINCH nudge
+	if len(output) == 0 && time.Now().Before(deadline) {
+		if cmd != nil && cmd.Process != nil {
+			cmd.Process.Signal(syscall.SIGWINCH)
+		}
+
+		retrySettle := settleDuration * 2
+		lastChangeTime = time.Now()
+		lastSize = int64(-1)
+
+		for time.Now().Before(deadline) {
+			time.Sleep(SnapshotPollInterval)
+
+			size, err := storage.Size(req.Name)
+			if err != nil {
+				break
+			}
+
+			if size != lastSize {
+				lastSize = size
+				lastChangeTime = time.Now()
+				continue
+			}
+
+			if size > 0 && time.Since(lastChangeTime) >= retrySettle {
+				break
+			}
+		}
+
+		output, err = storage.ReadAll(req.Name)
+		if err != nil {
+			return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+		}
+	}
+
+	result := string(output)
+	if req.HeadLines > 0 || req.TailLines > 0 {
+		result = limitLines(result, req.HeadLines, req.TailLines)
+	}
+
+	totalLen := int64(len(output))
+	meta.ReadPos = totalLen
+	storage.SaveMeta(req.Name, meta)
+
+	return Response{Success: true, Data: map[string]interface{}{
+		"output":   result,
+		"position": totalLen,
+		"state":    sess.State,
+	}}
+}
+
 func (s *Server) handleSend(req Request) Response {
 	s.mu.Lock()
 	sess, ok := s.sessions[req.Name]
@@ -607,6 +823,8 @@ func (s *Server) handleStop(req Request) Response {
 		}()
 		delete(s.cmds, req.Name)
 	}
+	delete(s.frameDetectors, req.Name)
+	delete(s.responders, req.Name)
 
 	sess.State = StateStopped
 	now := time.Now()
@@ -651,6 +869,8 @@ func (s *Server) handleKill(req Request) Response {
 
 	s.storage.Delete(req.Name)
 	delete(s.sessions, req.Name)
+	delete(s.frameDetectors, req.Name)
+	delete(s.responders, req.Name)
 
 	return Response{Success: true}
 }
@@ -748,6 +968,7 @@ func (s *Server) handleInfo(req Request) Response {
 		"read_position":  meta.ReadPos,
 		"cols":           meta.Cols,
 		"rows":           meta.Rows,
+		"tui_mode":       meta.TUIMode,
 	}
 
 	if sess.StoppedAt != nil {
@@ -800,7 +1021,6 @@ func (s *Server) handleResize(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not running", req.Name)}
 	}
-
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -818,7 +1038,7 @@ func (s *Server) handleResize(req Request) Response {
 		rows = meta.Rows
 	}
 
-	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
+	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: clampUint16(cols), Rows: clampUint16(rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize: %v", err)}
 	}
 
@@ -840,4 +1060,14 @@ func (s *Server) handleResize(req Request) Response {
 		"cols": cols,
 		"rows": rows,
 	}}
+}
+
+func clampUint16(v int) uint16 {
+	if v < 0 {
+		return 0
+	}
+	if v > 65535 {
+		return 65535
+	}
+	return uint16(v)
 }

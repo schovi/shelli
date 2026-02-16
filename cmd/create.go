@@ -22,6 +22,7 @@ var (
 	createCwdFlag  string
 	createColsFlag int
 	createRowsFlag int
+	createTUIFlag  bool
 )
 
 func init() {
@@ -31,6 +32,7 @@ func init() {
 	createCmd.Flags().StringVar(&createCwdFlag, "cwd", "", "Set working directory")
 	createCmd.Flags().IntVar(&createColsFlag, "cols", 80, "Terminal columns")
 	createCmd.Flags().IntVar(&createRowsFlag, "rows", 24, "Terminal rows")
+	createCmd.Flags().BoolVar(&createTUIFlag, "tui", false, "Enable TUI mode (auto-truncate buffer on frame boundaries)")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -47,6 +49,7 @@ func runCreate(cmd *cobra.Command, args []string) error {
 		Cwd:     createCwdFlag,
 		Cols:    createColsFlag,
 		Rows:    createRowsFlag,
+		TUIMode: createTUIFlag,
 	})
 	if err != nil {
 		return err

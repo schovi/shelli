@@ -55,6 +55,10 @@ func (r *ToolRegistry) List() []ToolDef {
 						"type":        "integer",
 						"description": "Terminal rows (default: 24)",
 					},
+					"tui": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Enable TUI mode for apps like vim, htop. Auto-truncates buffer on frame boundaries to reduce storage.",
+					},
 				},
 				"required": []string{"name"},
 			},
@@ -157,6 +161,10 @@ func (r *ToolRegistry) List() []ToolDef {
 					"strip_ansi": map[string]interface{}{
 						"type":        "boolean",
 						"description": "Remove ANSI escape codes from output",
+					},
+					"snapshot": map[string]interface{}{
+						"type":        "boolean",
+						"description": "Force TUI redraw via resize and read clean frame. Requires TUI mode (--tui on create). Incompatible with all, wait_pattern.",
 					},
 				},
 				"required": []string{"name"},
@@ -329,6 +337,7 @@ type CreateArgs struct {
 	Cwd     string   `json:"cwd"`
 	Cols    int      `json:"cols"`
 	Rows    int      `json:"rows"`
+	TUI     bool     `json:"tui"`
 }
 
 func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error) {
@@ -343,6 +352,7 @@ func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error)
 		Cwd:     a.Cwd,
 		Cols:    a.Cols,
 		Rows:    a.Rows,
+		TUIMode: a.TUI,
 	})
 	if err != nil {
 		return nil, err
@@ -519,6 +529,7 @@ type ReadArgs struct {
 	SettleMs    int    `json:"settle_ms"`
 	TimeoutSec  int    `json:"timeout_sec"`
 	StripAnsi   bool   `json:"strip_ansi"`
+	Snapshot    bool   `json:"snapshot"`
 }
 
 func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
@@ -543,6 +554,33 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 
 	if a.Head < 0 || a.Tail < 0 {
 		return nil, fmt.Errorf("head and tail require positive integers")
+	}
+
+	if a.Snapshot {
+		if a.All {
+			return nil, fmt.Errorf("snapshot and all are mutually exclusive")
+		}
+		if a.WaitPattern != "" {
+			return nil, fmt.Errorf("snapshot and wait_pattern are mutually exclusive")
+		}
+
+		output, pos, err := r.client.Snapshot(a.Name, a.SettleMs, a.TimeoutSec, a.Head, a.Tail)
+		if err != nil {
+			return nil, err
+		}
+
+		if a.StripAnsi {
+			output = ansi.Strip(output)
+		}
+
+		result := map[string]interface{}{
+			"output":   output,
+			"position": pos,
+		}
+		data, _ := json.MarshalIndent(result, "", "  ")
+		return &CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: string(data)}},
+		}, nil
 	}
 
 	mode := daemon.ReadModeNew
