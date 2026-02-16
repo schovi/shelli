@@ -196,6 +196,39 @@ func TestTerminalResponder_MultipleQueries(t *testing.T) {
 	}
 }
 
+func TestTerminalResponder_PartialSequenceBoundary(t *testing.T) {
+	// Partial sequences at chunk boundaries pass through unintercepted.
+	// This documents current behavior: no cross-chunk buffering (YAGNI).
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+
+	resp := NewTerminalResponder(w)
+
+	// Split DA1 (ESC[c) across two chunks: ESC[ in first, c in second
+	result1 := resp.Process([]byte("before\x1b["))
+	result2 := resp.Process([]byte("cafter"))
+
+	// First chunk: ESC[ passes through (not recognized as complete query)
+	if string(result1) != "before\x1b[" {
+		t.Errorf("chunk 1: result = %q, want %q", result1, "before\x1b[")
+	}
+
+	// Second chunk: 'c' alone is not ESC[c, passes through
+	if string(result2) != "cafter" {
+		t.Errorf("chunk 2: result = %q, want %q", result2, "cafter")
+	}
+
+	// No response should have been written (query was split)
+	got := readPipe(r, 50*time.Millisecond)
+	if got != nil {
+		t.Errorf("expected no response for split query, got %q", got)
+	}
+}
+
 func TestTerminalResponder_NoESCFastPath(t *testing.T) {
 	_, w, err := os.Pipe()
 	if err != nil {

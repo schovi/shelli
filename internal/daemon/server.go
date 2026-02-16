@@ -641,6 +641,13 @@ func (s *Server) handleSnapshot(req Request) Response {
 		fd.SetSnapshotMode(true)
 	}
 	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		if fd, ok := s.frameDetectors[req.Name]; ok {
+			fd.SetSnapshotMode(false)
+		}
+		s.mu.Unlock()
+	}()
 
 	tempCols := uint16(meta.Cols) + 1
 	tempRows := uint16(meta.Rows) + 1
@@ -735,12 +742,6 @@ func (s *Server) handleSnapshot(req Request) Response {
 			return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
 		}
 	}
-
-	s.mu.Lock()
-	if fd, ok := s.frameDetectors[req.Name]; ok {
-		fd.SetSnapshotMode(false)
-	}
-	s.mu.Unlock()
 
 	result := string(output)
 	if req.HeadLines > 0 || req.TailLines > 0 {
@@ -942,7 +943,6 @@ func (s *Server) handleInfo(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
-	_, tuiMode := s.frameDetectors[req.Name]
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -966,7 +966,7 @@ func (s *Server) handleInfo(req Request) Response {
 		"read_position":  meta.ReadPos,
 		"cols":           meta.Cols,
 		"rows":           meta.Rows,
-		"tui_mode":       tuiMode,
+		"tui_mode":       meta.TUIMode,
 	}
 
 	if sess.StoppedAt != nil {

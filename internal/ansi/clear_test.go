@@ -3,6 +3,7 @@ package ansi
 import (
 	"bytes"
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -1370,4 +1371,124 @@ func TestFrameDetector_CursorHomeLookAhead(t *testing.T) {
 			t.Error("should NOT truncate when only cursor control in next chunk")
 		}
 	})
+}
+
+func TestFrameDetector_ConcurrentAccess(t *testing.T) {
+	d := NewFrameDetector(DefaultTUIStrategy())
+	var wg sync.WaitGroup
+
+	wg.Add(3)
+
+	// Goroutine 1: continuous Process calls
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			d.Process([]byte("\x1b[2Jframe data"))
+		}
+	}()
+
+	// Goroutine 2: SetSnapshotMode toggles
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			d.SetSnapshotMode(true)
+			d.SetSnapshotMode(false)
+		}
+	}()
+
+	// Goroutine 3: Reset calls
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			d.Reset()
+		}
+	}()
+
+	wg.Wait()
+}
+
+func TestParseCursorRow_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		pos     int
+		wantRow int
+		wantEnd int
+		wantOK  bool
+	}{
+		{
+			name:    "ESC[H defaults to row 1",
+			data:    []byte("\x1b[H"),
+			pos:     0,
+			wantRow: 1,
+			wantEnd: 3,
+			wantOK:  true,
+		},
+		{
+			name:    "ESC[;5H no row before semicolon defaults to row 1",
+			data:    []byte("\x1b[;5H"),
+			pos:     0,
+			wantRow: 1,
+			wantEnd: 5,
+			wantOK:  true,
+		},
+		{
+			name:    "ESC[0;0H zero row",
+			data:    []byte("\x1b[0;0H"),
+			pos:     0,
+			wantRow: 0,
+			wantEnd: 6,
+			wantOK:  true,
+		},
+		{
+			name:   "very large row number (6 digits) rejected",
+			data:   []byte("\x1b[123456;1H"),
+			pos:    0,
+			wantOK: false,
+		},
+		{
+			name:    "5 digit row number accepted",
+			data:    []byte("\x1b[99999;1H"),
+			pos:     0,
+			wantRow: 99999,
+			wantEnd: 10,
+			wantOK:  true,
+		},
+		{
+			name:   "very large col number (6 digits) rejected",
+			data:   []byte("\x1b[1;123456H"),
+			pos:    0,
+			wantOK: false,
+		},
+		{
+			name:   "incomplete sequence",
+			data:   []byte("\x1b[5"),
+			pos:    0,
+			wantOK: false,
+		},
+		{
+			name:   "not a cursor position (color code)",
+			data:   []byte("\x1b[31m"),
+			pos:    0,
+			wantOK: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			row, end, ok := parseCursorRow(tt.data, tt.pos)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if row != tt.wantRow {
+				t.Errorf("row = %d, want %d", row, tt.wantRow)
+			}
+			if end != tt.wantEnd {
+				t.Errorf("end = %d, want %d", end, tt.wantEnd)
+			}
+		})
+	}
 }

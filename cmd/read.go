@@ -213,6 +213,9 @@ func runReadFollow(name string) error {
 		cancel()
 	}()
 
+	if readFollowMsFlag <= 0 {
+		readFollowMsFlag = 100
+	}
 	pollInterval := time.Duration(readFollowMsFlag) * time.Millisecond
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()

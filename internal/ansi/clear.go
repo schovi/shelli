@@ -1,6 +1,9 @@
 package ansi
 
-import "bytes"
+import (
+	"bytes"
+	"sync"
+)
 
 // TruncationStrategy defines which detection methods are enabled for TUI mode.
 type TruncationStrategy struct {
@@ -22,22 +25,28 @@ func DefaultTUIStrategy() TruncationStrategy {
 	}
 }
 
+// pendingTruncation tracks a deferred truncation that needs look-ahead
+// resolution in the next chunk (used by CursorJumpTop and CursorHome).
+type pendingTruncation struct {
+	active   bool
+	truncEnd int
+}
+
 // FrameDetector detects frame boundaries in PTY output for TUI applications.
-// Handles cross-chunk detection via pending buffer.
+// Handles cross-chunk detection via pending buffer. Thread-safe.
 type FrameDetector struct {
+	mu                  sync.Mutex
 	strategy            TruncationStrategy
 	pending             []byte
 	heuristicTrail      []byte // trailing bytes from previous chunk for cross-chunk cursor-home lookback
 	bufferSize          int    // track accumulated size for MaxSize check
 	bytesSinceLastFrame int    // bytes processed since last frame boundary (-1 = never seen)
 	seenFrame           bool   // true if we've ever seen a frame boundary
-	maxRowSeen          int    // highest row seen in cursor position sequences (for CursorJumpTop)
-	snapshotMode        bool   // when true, sync_mode truncation is suppressed
-	pendingJumpTruncEnd int  // byte offset where pending CursorJumpTop truncation would apply
-	pendingJumpActive   bool // true when a CursorJumpTop needs look-ahead resolution in next chunk
-	pendingHomeTruncEnd int  // byte offset where pending cursor_home truncation would apply
-	pendingHomeActive   bool // true when a cursor_home needs look-ahead resolution in next chunk
-	lastCursorHomePos   int  // byte position of last cursor_home truncation within current Process() call (-1 = none)
+	maxRowSeen        int              // highest row seen in cursor position sequences (for CursorJumpTop)
+	snapshotMode      bool             // when true, all truncation is suppressed
+	pendingJump       pendingTruncation // deferred CursorJumpTop needing look-ahead in next chunk
+	pendingHome       pendingTruncation // deferred cursor_home needing look-ahead in next chunk
+	lastCursorHomePos int              // byte position of last cursor_home truncation within current Process() call (-1 = none)
 }
 
 // DetectResult contains the result of processing a chunk.
@@ -51,24 +60,36 @@ func NewFrameDetector(strategy TruncationStrategy) *FrameDetector {
 	return &FrameDetector{strategy: strategy}
 }
 
-// truncation sequences with strategy category
-type truncSeq struct {
-	seq      []byte
-	strategy string
+// strategyGroup groups truncation sequences by the strategy flag that enables them.
+type strategyGroup struct {
+	enabled    func(s *TruncationStrategy, snapshotMode bool) bool
+	seqs       [][]byte
+	cursorHome bool // requires heuristic + cooldown + look-ahead
 }
 
-var truncationSequences = []truncSeq{
-	// Screen clear (priority 1)
-	{seq: []byte{0x1B, '[', '2', 'J'}, strategy: "screen_clear"},                     // ESC[2J - clear entire screen
-	{seq: []byte{0x1B, '[', '?', '1', '0', '4', '9', 'h'}, strategy: "screen_clear"}, // ESC[?1049h - alt buffer on
-	{seq: []byte{0x1B, 'c'}, strategy: "screen_clear"},                               // ESC c - terminal reset
-
-	// Sync mode begin (priority 2) - truncate on frame START, not end
-	{seq: []byte{0x1B, '[', '?', '2', '0', '2', '6', 'h'}, strategy: "sync_mode"}, // ESC[?2026h
-
-	// Cursor home (priority 3 - needs heuristic)
-	{seq: []byte{0x1B, '[', '1', ';', '1', 'H'}, strategy: "cursor_home"}, // ESC[1;1H
-	{seq: []byte{0x1B, '[', 'H'}, strategy: "cursor_home"},                // ESC[H (short form)
+var truncationGroups = []strategyGroup{
+	{
+		enabled: func(s *TruncationStrategy, snap bool) bool { return !snap && s.ScreenClear },
+		seqs: [][]byte{
+			{0x1B, '[', '2', 'J'},                     // ESC[2J - clear entire screen
+			{0x1B, '[', '?', '1', '0', '4', '9', 'h'}, // ESC[?1049h - alt buffer on
+			{0x1B, 'c'},                                // ESC c - terminal reset
+		},
+	},
+	{
+		enabled: func(s *TruncationStrategy, snap bool) bool { return !snap && s.SyncMode },
+		seqs: [][]byte{
+			{0x1B, '[', '?', '2', '0', '2', '6', 'h'}, // ESC[?2026h - sync begin
+		},
+	},
+	{
+		enabled:    func(s *TruncationStrategy, snap bool) bool { return !snap && s.CursorHome },
+		cursorHome: true,
+		seqs: [][]byte{
+			{0x1B, '[', '1', ';', '1', 'H'}, // ESC[1;1H
+			{0x1B, '[', 'H'},                // ESC[H (short form)
+		},
+	},
 }
 
 // cursor home heuristic sequences (must appear within lookback window)
@@ -89,6 +110,9 @@ const (
 // Process analyzes a chunk and returns whether truncation should occur
 // and the data to store (everything after the last truncation point).
 func (d *FrameDetector) Process(chunk []byte) DetectResult {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
 	// Combine pending bytes with new chunk
 	data := chunk
 	if len(d.pending) > 0 {
@@ -101,56 +125,37 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 	// Track cursor_home cooldown within this Process() call
 	d.lastCursorHomePos = -1
 
-	// Resolve pending CursorJumpTop from previous chunk.
-	// If content follows in this new chunk, the jump was a real frame boundary:
-	// set lastTruncEnd=0 so the caller clears previous data and keeps this chunk.
-	lastTruncEnd := -1
-	if d.pendingJumpActive {
-		d.pendingJumpActive = false
-		d.pendingJumpTruncEnd = 0
-		if d.hasContentAfterCursor(data, 0) {
-			lastTruncEnd = 0
-			d.maxRowSeen = 0
-		}
-	}
-
-	// Resolve pending cursor_home from previous chunk.
-	if d.pendingHomeActive {
-		d.pendingHomeActive = false
-		d.pendingHomeTruncEnd = 0
-		if d.hasContentAfterCursor(data, 0) {
-			lastTruncEnd = 0
-		}
-	}
+	lastTruncEnd := d.resolvePending(data)
 
 	// Find the last truncation sequence position
 	for i := 0; i < len(data); i++ {
-		for _, ts := range truncationSequences {
-			if !d.strategyEnabled(ts.strategy) {
+		for _, g := range truncationGroups {
+			if !g.enabled(&d.strategy, d.snapshotMode) {
 				continue
 			}
-			if i+len(ts.seq) <= len(data) && bytes.Equal(data[i:i+len(ts.seq)], ts.seq) {
-				if ts.strategy == "cursor_home" {
+			for _, seq := range g.seqs {
+				if i+len(seq) > len(data) || !bytes.Equal(data[i:i+len(seq)], seq) {
+					continue
+				}
+				if g.cursorHome {
 					if d.lastCursorHomePos >= 0 && i-d.lastCursorHomePos < cursorHomeCooldownBytes {
 						continue
 					}
 					if !d.checkCursorHomeHeuristic(data, i) {
 						continue
 					}
-					end := i + len(ts.seq)
-					if d.hasContentAfterCursor(data, end) {
+					end := i + len(seq)
+					switch {
+					case d.hasContentAfterCursor(data, end):
 						d.lastCursorHomePos = i
-					} else if end >= len(data) {
-						// At end of chunk, can't decide yet: defer to next chunk
-						d.pendingHomeTruncEnd = end
-						d.pendingHomeActive = true
+					case end >= len(data):
+						d.pendingHome = pendingTruncation{active: true, truncEnd: end}
 						continue
-					} else {
-						// Only cursor control sequences follow, not a new frame
+					default:
 						continue
 					}
 				}
-				lastTruncEnd = i + len(ts.seq)
+				lastTruncEnd = i + len(seq)
 				d.maxRowSeen = 0
 			}
 		}
@@ -163,11 +168,8 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 						lastTruncEnd = end
 						d.maxRowSeen = 0
 					} else if end >= len(data)-maxSequenceLen {
-						// Near end of chunk, can't decide yet: defer to next chunk
-						d.pendingJumpTruncEnd = end
-						d.pendingJumpActive = true
+						d.pendingJump = pendingTruncation{active: true, truncEnd: end}
 					}
-					// else: only cursor control sequences follow, not a new frame
 				} else if row > d.maxRowSeen {
 					d.maxRowSeen = row
 				}
@@ -175,38 +177,7 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 		}
 	}
 
-	// Buffer trailing bytes that could be start of escape sequence
-	pendingStart := len(data)
-	if len(data) > 0 {
-		for i := max(0, len(data)-maxSequenceLen); i < len(data); i++ {
-			if data[i] == 0x1B {
-				remaining := data[i:]
-				for _, ts := range truncationSequences {
-					if !d.strategyEnabled(ts.strategy) {
-						continue
-					}
-					if isPrefixOf(remaining, ts.seq) && len(remaining) < len(ts.seq) {
-						pendingStart = i
-						break
-					}
-				}
-				if pendingStart == len(data) && d.strategy.CursorJumpTop {
-					if isPartialCursorPosition(remaining) {
-						pendingStart = i
-					}
-				}
-				if pendingStart != len(data) {
-					break
-				}
-			}
-		}
-	}
-
-	if pendingStart < len(data) {
-		d.pending = make([]byte, len(data)-pendingStart)
-		copy(d.pending, data[pendingStart:])
-		data = data[:pendingStart]
-	}
+	data = d.bufferTrailingBytes(data)
 
 	if d.strategy.CursorHome {
 		if len(data) >= cursorHomeLookback {
@@ -231,51 +202,90 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 		d.bufferSize = d.bytesSinceLastFrame
 	}
 
-	// Check size cap (priority 4) - only if frame boundary was seen recently
-	// This prevents breaking hybrid TUI apps (btm, etc.) that send frames once at startup
-	// then switch to incremental updates
-	if d.strategy.MaxSize > 0 && !d.snapshotMode && hadRecentFrame && d.bufferSize > d.strategy.MaxSize {
-		d.bufferSize = len(data)
-		d.bytesSinceLastFrame = len(data)
-		return DetectResult{
-			Truncate:  true,
-			DataAfter: data,
-		}
+	if result := d.checkSizeCap(data, hadRecentFrame); result != nil {
+		return *result
 	}
 
 	if lastTruncEnd == -1 {
-		return DetectResult{
-			Truncate:  false,
-			DataAfter: data,
-		}
+		return DetectResult{Truncate: false, DataAfter: data}
 	}
 
-	// Return only data after the last truncation point
-	afterTrunc := data[lastTruncEnd:]
-	return DetectResult{
-		Truncate:  true,
-		DataAfter: afterTrunc,
-	}
+	return DetectResult{Truncate: true, DataAfter: data[lastTruncEnd:]}
 }
 
-// strategyEnabled checks if the given strategy type is enabled.
-// All strategies are disabled during snapshot mode.
-func (d *FrameDetector) strategyEnabled(strategy string) bool {
-	if d.snapshotMode {
-		return false
+// resolvePending checks for deferred truncations from the previous chunk.
+// If the deferred jump/home had content following in this new chunk,
+// the truncation is confirmed (returns 0). Otherwise returns -1 (no truncation).
+func (d *FrameDetector) resolvePending(data []byte) int {
+	lastTruncEnd := -1
+	if d.pendingJump.active {
+		d.pendingJump = pendingTruncation{}
+		if d.hasContentAfterCursor(data, 0) {
+			lastTruncEnd = 0
+			d.maxRowSeen = 0
+		}
 	}
-	switch strategy {
-	case "screen_clear":
-		return d.strategy.ScreenClear
-	case "sync_mode":
-		return d.strategy.SyncMode
-	case "cursor_home":
-		return d.strategy.CursorHome
-	case "cursor_jump_top":
-		return d.strategy.CursorJumpTop
-	default:
-		return false
+	if d.pendingHome.active {
+		d.pendingHome = pendingTruncation{}
+		if d.hasContentAfterCursor(data, 0) {
+			lastTruncEnd = 0
+		}
 	}
+	return lastTruncEnd
+}
+
+// bufferTrailingBytes moves trailing bytes that could be the start of an
+// incomplete escape sequence into d.pending for the next Process() call.
+// Returns data with those trailing bytes removed.
+func (d *FrameDetector) bufferTrailingBytes(data []byte) []byte {
+	pendingStart := len(data)
+	if len(data) > 0 {
+		for i := max(0, len(data)-maxSequenceLen); i < len(data); i++ {
+			if data[i] == 0x1B {
+				remaining := data[i:]
+				for _, g := range truncationGroups {
+					if !g.enabled(&d.strategy, d.snapshotMode) {
+						continue
+					}
+					for _, seq := range g.seqs {
+						if isPrefixOf(remaining, seq) && len(remaining) < len(seq) {
+							pendingStart = i
+							break
+						}
+					}
+					if pendingStart != len(data) {
+						break
+					}
+				}
+				if pendingStart == len(data) && d.strategy.CursorJumpTop {
+					if isPartialCursorPosition(remaining) {
+						pendingStart = i
+					}
+				}
+				if pendingStart != len(data) {
+					break
+				}
+			}
+		}
+	}
+	if pendingStart < len(data) {
+		d.pending = make([]byte, len(data)-pendingStart)
+		copy(d.pending, data[pendingStart:])
+		data = data[:pendingStart]
+	}
+	return data
+}
+
+// checkSizeCap applies the MaxSize truncation strategy.
+// Only fires when a frame boundary was seen recently (prevents breaking hybrid TUI apps
+// that send frames once at startup then switch to incremental updates).
+func (d *FrameDetector) checkSizeCap(data []byte, hadRecentFrame bool) *DetectResult {
+	if d.strategy.MaxSize > 0 && !d.snapshotMode && hadRecentFrame && d.bufferSize > d.strategy.MaxSize {
+		d.bufferSize = len(data)
+		d.bytesSinceLastFrame = len(data)
+		return &DetectResult{Truncate: true, DataAfter: data}
+	}
+	return nil
 }
 
 // SetSnapshotMode enables or disables snapshot mode.
@@ -283,6 +293,8 @@ func (d *FrameDetector) strategyEnabled(strategy string) bool {
 // sync_mode, cursor_home, CursorJumpTop, MaxSize). The settle timer
 // determines frame completion during snapshot, not frame detection.
 func (d *FrameDetector) SetSnapshotMode(enabled bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.snapshotMode = enabled
 }
 
@@ -364,16 +376,16 @@ func (d *FrameDetector) hasContentAfterCursor(data []byte, pos int) bool {
 // Reset clears all detector state (pending buffer, heuristics, counters).
 // Use before triggering a fresh TUI redraw (e.g., snapshot resize cycle).
 func (d *FrameDetector) Reset() {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.pending = nil
 	d.heuristicTrail = nil
 	d.bufferSize = 0
 	d.bytesSinceLastFrame = 0
 	d.seenFrame = false
 	d.maxRowSeen = 0
-	d.pendingJumpActive = false
-	d.pendingJumpTruncEnd = 0
-	d.pendingHomeActive = false
-	d.pendingHomeTruncEnd = 0
+	d.pendingJump = pendingTruncation{}
+	d.pendingHome = pendingTruncation{}
 	d.lastCursorHomePos = -1
 }
 
@@ -406,6 +418,8 @@ func (d *FrameDetector) BytesSinceLastFrame() int {
 
 // Flush returns any pending bytes (call when session ends).
 func (d *FrameDetector) Flush() []byte {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	pending := d.pending
 	d.pending = nil
 	return pending
@@ -450,8 +464,13 @@ func parseCursorRow(data []byte, i int) (row int, endIndex int, ok bool) {
 	row = 0
 	hasRow := false
 
-	// Parse row number
+	// Parse row number (cap at 5 digits to prevent overflow)
+	digits := 0
 	for j < len(data) && data[j] >= '0' && data[j] <= '9' {
+		digits++
+		if digits > 5 {
+			return 0, 0, false
+		}
 		row = row*10 + int(data[j]-'0')
 		hasRow = true
 		j++
@@ -464,8 +483,13 @@ func parseCursorRow(data []byte, i int) (row int, endIndex int, ok bool) {
 	// After row, expect ';' then col then 'H'/'F', OR just 'H'/'F' (row-only form)
 	if data[j] == ';' {
 		j++ // skip ';'
-		// Parse col number (we don't need the value)
+		// Parse col number (we don't need the value, cap at 5 digits)
+		colDigits := 0
 		for j < len(data) && data[j] >= '0' && data[j] <= '9' {
+			colDigits++
+			if colDigits > 5 {
+				return 0, 0, false
+			}
 			j++
 		}
 		if j >= len(data) {

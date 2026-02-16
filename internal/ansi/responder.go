@@ -2,6 +2,7 @@ package ansi
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"sync"
 )
@@ -126,6 +127,8 @@ func (r *TerminalResponder) respond(response string) {
 	r.mu.Unlock()
 
 	if ptmx != nil {
-		ptmx.Write([]byte(response))
+		if _, err := ptmx.Write([]byte(response)); err != nil {
+			log.Printf("TerminalResponder: write error: %v", err)
+		}
 	}
 }
