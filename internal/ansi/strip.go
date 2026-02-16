@@ -141,20 +141,36 @@ func convertCursorPositioning(s string) string {
 				row, _ := strconv.Atoi(remaining[loc[2]:loc[3]])
 				col, _ := strconv.Atoi(remaining[loc[4]:loc[5]])
 				// Convert from 1-based to 0-based
-				curRow = row - 1
-				curCol = col - 1
-				if curRow < 0 {
-					curRow = 0
+				newRow := row - 1
+				newCol := col - 1
+				if newRow < 0 {
+					newRow = 0
 				}
-				if curCol < 0 {
-					curCol = 0
+				if newCol < 0 {
+					newCol = 0
 				}
+				if newRow == 0 && newCol == 0 && curRow >= 10 && hasPrintableAhead(s, i+loc[1], 100) {
+					for r := range grid {
+						for c := range grid[r] {
+							grid[r][c] = ' '
+						}
+					}
+				}
+				curRow = newRow
+				curCol = newCol
 				i += loc[1]
 				continue
 			}
 
 			// Try single-arg cursor sequences: ESC[nH, ESC[H, ESC[nG, ESC[nd
 			if row, col, end, ok := parseSingleArgCursor(s, i, curRow, curCol); ok {
+				if row == 0 && col == 0 && curRow >= 10 && hasPrintableAhead(s, end, 100) {
+					for r := range grid {
+						for c := range grid[r] {
+							grid[r][c] = ' '
+						}
+					}
+				}
 				curRow = row
 				curCol = col
 				i = end
@@ -190,6 +206,42 @@ func convertCursorPositioning(s string) string {
 					case 2: // entire line
 						for c := 0; c < maxCol; c++ {
 							grid[curRow][c] = ' '
+						}
+					}
+				}
+				i = end
+				continue
+			}
+
+			// Erase display: ESC[J, ESC[0J, ESC[1J, ESC[2J
+			if mode, end, ok := parseEraseDisplay(s, i); ok {
+				switch mode {
+				case 0: // cursor to end of display
+					if curRow >= 0 && curRow < maxRow {
+						for c := curCol; c < maxCol; c++ {
+							grid[curRow][c] = ' '
+						}
+						for r := curRow + 1; r < maxRow; r++ {
+							for c := 0; c < maxCol; c++ {
+								grid[r][c] = ' '
+							}
+						}
+					}
+				case 1: // start of display to cursor
+					for r := 0; r < curRow && r < maxRow; r++ {
+						for c := 0; c < maxCol; c++ {
+							grid[r][c] = ' '
+						}
+					}
+					if curRow >= 0 && curRow < maxRow {
+						for c := 0; c <= curCol && c < maxCol; c++ {
+							grid[curRow][c] = ' '
+						}
+					}
+				case 2: // entire display
+					for r := range grid {
+						for c := range grid[r] {
+							grid[r][c] = ' '
 						}
 					}
 				}
@@ -373,8 +425,78 @@ func parseEraseLine(s string, i int) (mode, end int, ok bool) {
 	return num, j + 1, true
 }
 
+// parseEraseDisplay parses ESC[J, ESC[0J, ESC[1J, ESC[2J at position i.
+// Returns mode (0=cursor-to-end, 1=start-to-cursor, 2=full display), end index, and ok.
+func parseEraseDisplay(s string, i int) (mode, end int, ok bool) {
+	if i+1 >= len(s) || s[i] != 0x1B || s[i+1] != '[' {
+		return 0, 0, false
+	}
+	j := i + 2
+	if j >= len(s) {
+		return 0, 0, false
+	}
+	if s[j] == 'J' {
+		return 0, j + 1, true // ESC[J = erase to end (mode 0)
+	}
+	num := 0
+	hasNum := false
+	for j < len(s) && s[j] >= '0' && s[j] <= '9' {
+		num = num*10 + int(s[j]-'0')
+		hasNum = true
+		j++
+	}
+	if j >= len(s) || s[j] != 'J' || !hasNum {
+		return 0, 0, false
+	}
+	if num < 0 || num > 2 {
+		return 0, 0, false
+	}
+	return num, j + 1, true
+}
+
 func isCSITerminator(c byte) bool {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '@' || c == '`'
+}
+
+// hasPrintableAhead checks if printable content follows within maxBytes,
+// skipping escape sequences. Distinguishes real redraws (content follows
+// cursor home) from cursor parking (only control sequences or end of string).
+func hasPrintableAhead(s string, pos, maxBytes int) bool {
+	end := pos + maxBytes
+	if end > len(s) {
+		end = len(s)
+	}
+	i := pos
+	for i < end {
+		if s[i] == 0x1B {
+			if i+1 < end && s[i+1] == '[' {
+				j := i + 2
+				for j < end && !isCSITerminator(s[j]) {
+					j++
+				}
+				if j < end {
+					j++ // skip terminator
+				}
+				i = j
+				continue
+			}
+			if i+1 < end && (s[i+1] == '(' || s[i+1] == ')' || s[i+1] == '#') {
+				i += 3
+				continue
+			}
+			i += 2
+			continue
+		}
+		if s[i] == '\n' || s[i] == '\r' {
+			i++
+			continue
+		}
+		if s[i] >= 0x20 && s[i] != 0x7F {
+			return true
+		}
+		i++
+	}
+	return false
 }
 
 func Strip(s string) string {

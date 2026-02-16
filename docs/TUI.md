@@ -101,6 +101,16 @@ The virtual screen buffer (`internal/ansi/strip.go`) converts cursor-positioned 
 3. Process the string, executing cursor movements and writing characters to grid cells
 4. Output: join grid rows, right-trim trailing spaces, remove trailing empty rows
 
+### Grid clearing on redraw
+
+During snapshot reads, the resize cycle (SIGWINCH) triggers two full redraws that accumulate in the buffer. The second redraw moves the cursor back to (0,0) and rewrites the screen. If lines in the second redraw are shorter than the first, stale characters remain because the grid isn't cleared between redraws.
+
+Two mechanisms handle this:
+
+1. **ESC[2J (erase display)**: Apps like ncdu send explicit screen clear sequences. The virtual buffer now executes these, clearing the grid unconditionally.
+
+2. **Cursor home with look-ahead**: When cursor positioning moves to (0,0) from row 10+ (0-based), the buffer checks if printable content follows within 100 bytes. If yes (real redraw), the grid is cleared. If only escape sequences or end-of-string follow (cursor parking), the grid is preserved. This prevents apps like newsboat from having their output wiped by trailing cursor-home sequences used for cursor positioning after rendering.
+
 ### Supported sequences
 
 | Sequence | Name | Behavior |
@@ -116,6 +126,9 @@ The virtual screen buffer (`internal/ansi/strip.go`) converts cursor-positioned 
 | `ESC[K` / `ESC[0K` | Erase to End | Clear from cursor to end of line |
 | `ESC[1K` | Erase to Start | Clear from start of line to cursor |
 | `ESC[2K` | Erase Full Line | Clear entire line |
+| `ESC[J` / `ESC[0J` | Erase to End of Display | Clear from cursor to end of display |
+| `ESC[1J` | Erase to Start of Display | Clear from start of display to cursor |
+| `ESC[2J` | Erase Full Display | Clear entire display |
 | `ESC(0` | DEC Graphics On | Activate DEC Special Graphics charset |
 | `ESC(B` | DEC Graphics Off | Deactivate, return to ASCII |
 
@@ -169,12 +182,12 @@ The `TerminalResponder` (`internal/ansi/responder.go`) intercepts terminal capab
 | micro | CursorJumpTop + cursor_home | Clean | Good | 9/9 | Fixed by cursor_home look-ahead + snapshot suppression |
 | weechat | cursor_home | Clean | Good | 9/9 | Timing-dependent at large sizes |
 | irssi | screen_clear | Clean | Good | 9/9 | |
-| newsboat | screen_clear | Clean | Minor gaps | 8/9 | Help screen capture fails |
+| newsboat | screen_clear | Clean | Good | 9/9 | Fixed by grid clearing on redraw |
 | mc | cursor_home | Clean | Good | 9/9 | Heavy box drawing renders well |
 | bat | screen_clear | Clean | Good | 9/9* | Fixed by newline grid sizing |
-| aerc | N/A | N/A | N/A | SKIP | Needs email config |
+| ncdu | screen_clear | Clean | Good | 9/9 | Fixed by erase display support |
 
-*= fixed by snapshot truncation suppression or newline grid sizing
+*= fixed by snapshot truncation suppression, newline grid sizing, or grid clearing on redraw
 
 ## Known Limitations
 

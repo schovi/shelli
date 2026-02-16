@@ -283,6 +283,68 @@ func TestStrip(t *testing.T) {
 			input:    "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3",
 			expected: "row1\nrow2\nrow3",
 		},
+		// Grid clearing on full redraw (cursor home from deep row)
+		{
+			name: "redraw with shorter lines clears stale content via ESC[H",
+			input: "\x1b[1;1Hfirst row long\x1b[2;1Hrow2\x1b[3;1Hrow3\x1b[4;1Hrow4" +
+				"\x1b[5;1Hrow5\x1b[6;1Hrow6\x1b[7;1Hrow7\x1b[8;1Hrow8" +
+				"\x1b[9;1Hrow9\x1b[10;1Hrow10\x1b[11;1Hrow11" +
+				"\x1b[Hshort",
+			expected: "short",
+		},
+		{
+			name: "identical redraws preserve content via ESC[1;1H",
+			input: "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3\x1b[4;1Hrow4" +
+				"\x1b[5;1Hrow5\x1b[6;1Hrow6\x1b[7;1Hrow7\x1b[8;1Hrow8" +
+				"\x1b[9;1Hrow9\x1b[10;1Hrow10\x1b[11;1Hrow11" +
+				"\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3\x1b[4;1Hrow4" +
+				"\x1b[5;1Hrow5\x1b[6;1Hrow6\x1b[7;1Hrow7\x1b[8;1Hrow8" +
+				"\x1b[9;1Hrow9\x1b[10;1Hrow10\x1b[11;1Hrow11",
+			expected: "row1\nrow2\nrow3\nrow4\nrow5\nrow6\nrow7\nrow8\nrow9\nrow10\nrow11",
+		},
+		{
+			name:     "cursor home from low row does not clear grid",
+			input:    "\x1b[1;1Haaaa\x1b[5;1Hrow5\x1b[Hbb",
+			expected: "bbaa\n\n\n\nrow5",
+		},
+		{
+			name: "trailing cursor home for parking does not clear grid",
+			input: "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3\x1b[4;1Hrow4" +
+				"\x1b[5;1Hrow5\x1b[6;1Hrow6\x1b[7;1Hrow7\x1b[8;1Hrow8" +
+				"\x1b[9;1Hrow9\x1b[10;1Hrow10\x1b[11;1Hrow11" +
+				"\x1b[H\x1b[40d\x1b[H",
+			expected: "row1\nrow2\nrow3\nrow4\nrow5\nrow6\nrow7\nrow8\nrow9\nrow10\nrow11",
+		},
+		{
+			name: "cursor home followed by ESC sequences only does not clear grid",
+			input: "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3\x1b[4;1Hrow4" +
+				"\x1b[5;1Hrow5\x1b[6;1Hrow6\x1b[7;1Hrow7\x1b[8;1Hrow8" +
+				"\x1b[9;1Hrow9\x1b[10;1Hrow10\x1b[11;1Hrow11" +
+				"\x1b[H\x1b[?25h\x1b[?12l",
+			expected: "row1\nrow2\nrow3\nrow4\nrow5\nrow6\nrow7\nrow8\nrow9\nrow10\nrow11",
+		},
+		// Erase display
+		{
+			name:     "ESC[2J clears entire grid",
+			input:    "\x1b[1;1Hfirst frame\x1b[2;1Hrow2\x1b[H\x1b[2Jsecond",
+			expected: "second",
+		},
+		{
+			name: "ncdu-style redraw via ESC[2J after cursor repositioning",
+			input: "\x1b[H\x1b[2Jframe1 row1\x1b[2;1Hframe1 row2\x1b[3;1Hframe1 row3" +
+				"\x1b[3d\x1b[H\x1b[2Jframe2 short",
+			expected: "frame2 short",
+		},
+		{
+			name:     "ESC[J erases from cursor to end",
+			input:    "\x1b[1;1Hhello world\x1b[2;1Hrow2\x1b[1;6H\x1b[J",
+			expected: "hello",
+		},
+		{
+			name:     "ESC[1J erases from start to cursor",
+			input:    "\x1b[1;1Hhello world\x1b[2;1Hrow2\x1b[1;6H\x1b[1J",
+			expected: "      world\nrow2",
+		},
 	}
 
 	for _, tt := range tests {

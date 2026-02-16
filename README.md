@@ -525,11 +525,11 @@ This reduces storage from ~50MB to ~2KB for typical TUI sessions.
 - File managers: `ranger`, `nnn`, `yazi`, `vifm`, `mc`
 - Git tools: `lazygit`, `tig`
 - Editors/viewers: `vim`, `less`, `micro`, `bat`
-- Chat clients: `weechat`, `irssi`
+- Chat clients: `weechat`, `irssi`, `newsboat`
 
-**Limited support:**
-- `newsboat` (8/9, help screen capture fails)
-- Apps with complex mouse/input handling may behave unexpectedly
+See [docs/TUI.md](docs/TUI.md) for detailed TUI internals, app compatibility, and known limitations.
+
+Apps with complex mouse/input handling may behave unexpectedly.
 
 **shelli works best with:**
 - REPLs (Python, Node, Ruby, etc.)
