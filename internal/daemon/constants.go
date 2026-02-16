@@ -12,7 +12,7 @@ const (
 
 	DefaultSnapshotSettleMs = 300
 	SnapshotPollInterval    = 25 * time.Millisecond
-	SnapshotResizePause     = 50 * time.Millisecond
+	SnapshotResizePause     = 200 * time.Millisecond
 
 	ReadModeNew = "new"
 	ReadModeAll = "all"

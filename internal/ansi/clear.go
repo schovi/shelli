@@ -35,6 +35,8 @@ type FrameDetector struct {
 	snapshotMode        bool   // when true, sync_mode truncation is suppressed
 	pendingJumpTruncEnd int  // byte offset where pending CursorJumpTop truncation would apply
 	pendingJumpActive   bool // true when a CursorJumpTop needs look-ahead resolution in next chunk
+	pendingHomeTruncEnd int  // byte offset where pending cursor_home truncation would apply
+	pendingHomeActive   bool // true when a cursor_home needs look-ahead resolution in next chunk
 	lastCursorHomePos   int  // byte position of last cursor_home truncation within current Process() call (-1 = none)
 }
 
@@ -112,6 +114,15 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 		}
 	}
 
+	// Resolve pending cursor_home from previous chunk.
+	if d.pendingHomeActive {
+		d.pendingHomeActive = false
+		d.pendingHomeTruncEnd = 0
+		if d.hasContentAfterCursor(data, 0) {
+			lastTruncEnd = 0
+		}
+	}
+
 	// Find the last truncation sequence position
 	for i := 0; i < len(data); i++ {
 		for _, ts := range truncationSequences {
@@ -126,7 +137,18 @@ func (d *FrameDetector) Process(chunk []byte) DetectResult {
 					if !d.checkCursorHomeHeuristic(data, i) {
 						continue
 					}
-					d.lastCursorHomePos = i
+					end := i + len(ts.seq)
+					if d.hasContentAfterCursor(data, end) {
+						d.lastCursorHomePos = i
+					} else if end >= len(data) {
+						// At end of chunk, can't decide yet: defer to next chunk
+						d.pendingHomeTruncEnd = end
+						d.pendingHomeActive = true
+						continue
+					} else {
+						// Only cursor control sequences follow, not a new frame
+						continue
+					}
 				}
 				lastTruncEnd = i + len(ts.seq)
 				d.maxRowSeen = 0
@@ -350,6 +372,8 @@ func (d *FrameDetector) Reset() {
 	d.maxRowSeen = 0
 	d.pendingJumpActive = false
 	d.pendingJumpTruncEnd = 0
+	d.pendingHomeActive = false
+	d.pendingHomeTruncEnd = 0
 	d.lastCursorHomePos = -1
 }
 

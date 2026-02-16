@@ -1274,3 +1274,100 @@ func TestFrameDetector_CursorJumpTopLookAhead(t *testing.T) {
 		}
 	})
 }
+
+func TestFrameDetector_CursorHomeLookAhead(t *testing.T) {
+	t.Run("vim pattern: second cursor_home followed by control only - no truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		// First cursor_home with content after (legitimate frame start)
+		// Then ~5000 bytes of row content
+		// Then second cursor_home followed by only cursor control (editing cursor return)
+		padding := make([]byte, 5000)
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		var chunk []byte
+		chunk = append(chunk, []byte("\x1b[?25l\x1b[1;1H")...) // first cursor_home (frame start)
+		chunk = append(chunk, padding...)
+		chunk = append(chunk, []byte("\x1b[0m\x1b[1;1H")...)     // second cursor_home (editing cursor)
+		chunk = append(chunk, []byte("\x1b[?12l\x1b[?25h")...)   // cursor control only
+
+		result := d.Process(chunk)
+		if !result.Truncate {
+			t.Error("should truncate (first cursor_home)")
+		}
+		// DataAfter should be from first cursor_home, second should be suppressed
+		wantLen := 5000 + len("\x1b[0m\x1b[1;1H") + len("\x1b[?12l\x1b[?25h")
+		if len(result.DataAfter) != wantLen {
+			t.Errorf("DataAfter len = %d, want %d (second cursor_home should be suppressed)", len(result.DataAfter), wantLen)
+		}
+	})
+
+	t.Run("micro pattern: cursor_home followed by cursor control only - no truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		// cursor_home with heuristic, followed by only cursor control sequences
+		result := d.Process([]byte("content\x1b[0m\x1b[1;1H\x1b[?12l\x1b[?25h"))
+		if result.Truncate {
+			t.Error("should NOT truncate when only cursor control follows cursor_home")
+		}
+	})
+
+	t.Run("multi-frame with content still works: both fire", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		padding := make([]byte, 5000)
+		for i := range padding {
+			padding[i] = 'x'
+		}
+		var chunk []byte
+		chunk = append(chunk, []byte("old\x1b[0m\x1b[1;1H")...) // first cursor_home
+		chunk = append(chunk, padding...)
+		chunk = append(chunk, []byte("\x1b[0m\x1b[1;1H")...) // second cursor_home (beyond cooldown)
+		chunk = append(chunk, []byte("final")...)             // content after second
+
+		result := d.Process(chunk)
+		if !result.Truncate {
+			t.Error("should truncate")
+		}
+		// Both should fire, DataAfter from second cursor_home
+		if !bytes.Equal(result.DataAfter, []byte("final")) {
+			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "final")
+		}
+	})
+
+	t.Run("cross-chunk deferred: content follows - truncation fires", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		// cursor_home at the very end of chunk (no bytes after)
+		result := d.Process([]byte("old\x1b[0m\x1b[1;1H"))
+		if result.Truncate {
+			t.Error("should not truncate yet (deferred)")
+		}
+
+		// Next chunk has content
+		result = d.Process([]byte("new frame content"))
+		if !result.Truncate {
+			t.Error("should truncate when content arrives in next chunk")
+		}
+		if !bytes.Equal(result.DataAfter, []byte("new frame content")) {
+			t.Errorf("DataAfter = %q, want %q", result.DataAfter, "new frame content")
+		}
+	})
+
+	t.Run("cross-chunk deferred: control only - no truncation", func(t *testing.T) {
+		d := NewFrameDetector(TruncationStrategy{CursorHome: true})
+
+		// cursor_home at the very end of chunk
+		result := d.Process([]byte("old\x1b[0m\x1b[1;1H"))
+		if result.Truncate {
+			t.Error("should not truncate yet (deferred)")
+		}
+
+		// Next chunk has only cursor control
+		result = d.Process([]byte("\x1b[?25h\x1b[?12l"))
+		if result.Truncate {
+			t.Error("should NOT truncate when only cursor control in next chunk")
+		}
+	})
+}

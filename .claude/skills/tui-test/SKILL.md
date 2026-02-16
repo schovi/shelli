@@ -411,18 +411,17 @@ Async events, input + output interleaving. These may need network config.
 - **Prereq**: No server needed for basic test.
 - **Notes**: Classic IRC client. Status bar + input line. Session instability with repeated SIGWINCH.
 
-### Category: Email / Feeds / Misc
+### Category: Feeds / Disk / Misc
 
-Forms, multi-pane, longer content. Some need external config.
+Multi-pane, list-based, longer content. Some need minimal config.
 
-#### aerc
+#### ncdu
 
-- **Install**: `brew install aerc`
-- **Launch**: `aerc`
-- **Key test**: Send `?` (help)
-- **Expected change**: Help view or keybindings shown
-- **Prereq**: Needs email config (~/.config/aerc/accounts.conf). If not configured, app may show setup wizard or error. SKIP if it can't render a UI.
-- **Notes**: Terminal email client. May need config to show meaningful UI.
+- **Install**: `brew install ncdu`
+- **Launch**: `ncdu /tmp`
+- **Key test**: Send `j` (move down in list)
+- **Expected change**: Selection moves to next directory/file entry
+- **Notes**: Disk usage analyzer. ncurses-based. Clean list UI with size bars. No config needed, works immediately.
 
 #### newsboat
 
@@ -462,7 +461,7 @@ For `--category` argument:
 | git | lazygit, tig |
 | editors | vim, less, micro |
 | network | weechat, irssi |
-| misc | aerc, newsboat, mc, bat |
+| misc | ncdu, newsboat, mc, bat |
 
 ---
 

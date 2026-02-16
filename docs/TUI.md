@@ -44,7 +44,12 @@ The `FrameDetector` (`internal/ansi/clear.go`) processes PTY output chunks and i
 - `ESC[0m` or `ESC[m` (attribute reset)
 - `ESC[?25l` (hide cursor)
 
-This prevents false positives from apps that use cursor home for normal positioning. A within-chunk cooldown of 4096 bytes prevents double-firing when apps send multiple cursor_home sequences in one render pass (e.g., vim).
+Additionally uses look-ahead to distinguish real frame boundaries from cursor repositioning (e.g., vim/micro editing cursor returning to row 1):
+- If printable content follows within 50 bytes: truncate (real frame)
+- If only cursor control sequences follow (`ESC[?25h`, `ESC[?12l`, etc.): skip
+- If at end of chunk (ambiguous): defer decision to next chunk
+
+A within-chunk cooldown of 4096 bytes prevents double-firing when apps send multiple cursor_home sequences within a single render pass.
 
 **Apps**: k9s, htop, nnn
 
@@ -76,7 +81,7 @@ Snapshot (`--snapshot` on read) provides a clean, current frame by forcing a ful
 1. **Cold start wait**: If storage is empty, wait up to 2s for initial content (handles slow-starting apps)
 2. **Clear storage** and reset frame detector
 3. **Enable snapshot mode** (suppresses ALL truncation strategies)
-4. **Resize cycle**: Set terminal to (cols+1, rows+1), send SIGWINCH, pause 50ms, restore original size, send SIGWINCH
+4. **Resize cycle**: Set terminal to (cols+1, rows+1), send SIGWINCH, pause 200ms, restore original size, send SIGWINCH
 5. **Settle loop**: Poll storage every 25ms until content stops changing for `settle_ms` (default 300ms)
 6. **Retry**: If output is still empty, send another SIGWINCH with 2x settle time
 7. **Disable snapshot mode** and return output
@@ -160,9 +165,9 @@ The `TerminalResponder` (`internal/ansi/responder.go`) intercepts terminal capab
 | vifm | cursor_home | Clean | Good | 9/9 | |
 | lazygit | sync_mode | Clean | Good | 9/9 | |
 | tig | screen_clear | Clean | Good | 9/9 | |
-| vim | screen_clear | Clean | Good | 9/9* | Fixed by snapshot truncation suppression |
+| vim | screen_clear + cursor_home | Clean | Good | 9/9 | Fixed by cursor_home look-ahead + snapshot suppression |
 | less | screen_clear | Clean | Good | 9/9* | Fixed by newline grid sizing |
-| micro | CursorJumpTop | Clean | Good | 9/9* | Fixed by snapshot truncation suppression |
+| micro | CursorJumpTop + cursor_home | Clean | Good | 9/9 | Fixed by cursor_home look-ahead + snapshot suppression |
 | weechat | cursor_home | Clean | Good | 9/9 | Timing-dependent at large sizes |
 | irssi | screen_clear | Clean | Good | 9/9 | |
 | newsboat | screen_clear | Clean | Minor gaps | 8/9 | Help screen capture fails |
@@ -206,4 +211,4 @@ Some apps with complex multi-pane layouts produce partial strip-ansi output:
 | `maxGridRows` | 500 | `strip.go` | Maximum virtual screen buffer rows |
 | `DefaultSnapshotSettleMs` | 300ms | `constants.go` | Default settle time for snapshot |
 | `SnapshotPollInterval` | 25ms | `constants.go` | Polling interval during snapshot settle |
-| `SnapshotResizePause` | 50ms | `constants.go` | Pause between resize steps |
+| `SnapshotResizePause` | 200ms | `constants.go` | Pause between resize steps |
