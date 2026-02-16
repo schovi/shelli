@@ -6,27 +6,18 @@ import (
 	"sync"
 )
 
+
 // TerminalResponder intercepts terminal capability queries in PTY output
 // and writes appropriate responses to the PTY master fd (appearing as input
 // to the subprocess). This unblocks apps like yazi that wait for DA1/DA2/etc.
 type TerminalResponder struct {
 	mu   sync.Mutex
 	ptmx *os.File
-	cols int
-	rows int
 }
 
 // NewTerminalResponder creates a responder that writes responses to ptmx.
-func NewTerminalResponder(ptmx *os.File, cols, rows int) *TerminalResponder {
-	return &TerminalResponder{ptmx: ptmx, cols: cols, rows: rows}
-}
-
-// SetSize updates the terminal dimensions used for DSR responses.
-func (r *TerminalResponder) SetSize(cols, rows int) {
-	r.mu.Lock()
-	r.cols = cols
-	r.rows = rows
-	r.mu.Unlock()
+func NewTerminalResponder(ptmx *os.File) *TerminalResponder {
+	return &TerminalResponder{ptmx: ptmx}
 }
 
 // Process scans data for terminal queries, sends responses to the PTY,
@@ -106,11 +97,6 @@ func (r *TerminalResponder) matchQuery(data []byte, pos int) (int, string) {
 		if remaining >= 5 && data[pos+3] == '0' && data[pos+4] == 'c' {
 			return 5, "\x1b[>1;1;0c"
 		}
-	}
-
-	// DSR (cursor position): ESC[6n
-	if remaining >= 4 && data[pos+2] == '6' && data[pos+3] == 'n' {
-		return 4, "\x1b[1;1R"
 	}
 
 	// Kitty keyboard query: ESC[?u

@@ -147,7 +147,6 @@ The `TerminalResponder` (`internal/ansi/responder.go`) intercepts terminal capab
 |-------|----------|----------|
 | DA1 (Primary Device Attributes) | `ESC[c` / `ESC[0c` | `ESC[?62;22c` (VT220 with ANSI color) |
 | DA2 (Secondary Device Attributes) | `ESC[>c` / `ESC[>0c` | `ESC[>1;1;0c` (VT220, version 1) |
-| DSR (Cursor Position Report) | `ESC[6n` | `ESC[rows;colsR` (current terminal size) |
 | Kitty Keyboard Query | `ESC[?u` | `ESC[?0u` (not supported) |
 | DECRPM (Mode Report) | `ESC[?{n}$p` | `ESC[?{n};0$y` (not recognized) |
 

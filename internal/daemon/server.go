@@ -382,7 +382,7 @@ func (s *Server) handleCreate(req Request) Response {
 	s.doneChans[req.Name] = make(chan struct{})
 	if req.TUIMode {
 		s.frameDetectors[req.Name] = ansi.NewFrameDetector(ansi.DefaultTUIStrategy())
-		s.responders[req.Name] = ansi.NewTerminalResponder(ptmx, cols, rows)
+		s.responders[req.Name] = ansi.NewTerminalResponder(ptmx)
 	}
 
 	go s.captureOutput(req.Name, ptmx, cmd)
@@ -611,7 +611,6 @@ func (s *Server) handleSnapshot(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("session %q PTY not available", req.Name)}
 	}
 	cmd := s.cmds[req.Name]
-	responder := s.responders[req.Name]
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -646,9 +645,6 @@ func (s *Server) handleSnapshot(req Request) Response {
 	tempCols := uint16(meta.Cols) + 1
 	tempRows := uint16(meta.Rows) + 1
 	pty.Setsize(ptmx, &pty.Winsize{Cols: tempCols, Rows: tempRows})
-	if responder != nil {
-		responder.SetSize(int(tempCols), int(tempRows))
-	}
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Signal(syscall.SIGWINCH)
 	}
@@ -656,9 +652,6 @@ func (s *Server) handleSnapshot(req Request) Response {
 
 	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(meta.Cols), Rows: uint16(meta.Rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize for snapshot: %v", err)}
-	}
-	if responder != nil {
-		responder.SetSize(meta.Cols, meta.Rows)
 	}
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Signal(syscall.SIGWINCH)
@@ -1026,8 +1019,6 @@ func (s *Server) handleResize(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not running", req.Name)}
 	}
-	responder := s.responders[req.Name]
-
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -1047,10 +1038,6 @@ func (s *Server) handleResize(req Request) Response {
 
 	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize: %v", err)}
-	}
-
-	if responder != nil {
-		responder.SetSize(cols, rows)
 	}
 
 	// Send SIGWINCH explicitly to ensure the process receives it

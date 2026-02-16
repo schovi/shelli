@@ -48,7 +48,7 @@ shelli provides persistent interactive shell sessions via PTY-backed processes m
 - `ansi/`: ANSI escape code stripping, TUI frame detection, terminal query responses (see `docs/TUI.md` for details)
   - `strip.go`: ANSI escape code removal with rune-based virtual screen buffer supporting cursor positioning, relative movement (A/B/C/D), erase line (K), DEC Special Graphics charset, and newline-based grid sizing
   - `clear.go`: `FrameDetector` for TUI mode (screen clear, sync mode, cursor home with cooldown, CursorJumpTop with look-ahead, size cap). Snapshot mode suppresses ALL truncation strategies.
-  - `responder.go`: `TerminalResponder` intercepts DA1/DA2/DSR/Kitty queries and writes responses to PTY
+  - `responder.go`: `TerminalResponder` intercepts DA1/DA2/Kitty queries and writes responses to PTY
 - `escape/`: Escape sequence interpretation for raw mode
 
 ### Data Flow
@@ -73,7 +73,7 @@ CLI/MCP → daemon.Client → Unix socket → daemon.Server → PTY → subproce
 - **TTL cleanup**: Optional auto-deletion of stopped sessions via `--stopped-ttl`
 - **TUI mode**: `--tui` flag enables frame detection with multiple strategies (screen clear, sync mode, cursor home, size cap) to auto-truncate buffer for TUI apps
 - **Snapshot read**: `--snapshot` on read clears storage and resets the frame detector, then triggers a resize cycle (SIGWINCH) to force a full TUI redraw, waits for settle, then reads the clean frame. Pre-clearing prevents races between captureOutput and the settle loop. Requires TUI mode.
-- **Terminal responder**: TUI sessions get a `TerminalResponder` that intercepts terminal capability queries (DA1, DA2, DSR, Kitty keyboard, DECRPM) in PTY output and writes responses to PTY input. Unblocks apps like yazi that block on unanswered queries.
+- **Terminal responder**: TUI sessions get a `TerminalResponder` that intercepts terminal capability queries (DA1, DA2, Kitty keyboard, DECRPM) in PTY output and writes responses to PTY input. Unblocks apps like yazi that block on unanswered queries.
 
 ## Claude Plugin
 

@@ -30,7 +30,7 @@ func TestTerminalResponder_DA1(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 
-	resp := NewTerminalResponder(w, 80, 24)
+	resp := NewTerminalResponder(w)
 
 	t.Run("ESC[c", func(t *testing.T) {
 		result := resp.Process([]byte("before\x1b[cafter"))
@@ -65,7 +65,7 @@ func TestTerminalResponder_DA2(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 
-	resp := NewTerminalResponder(w, 80, 24)
+	resp := NewTerminalResponder(w)
 
 	t.Run("ESC[>c", func(t *testing.T) {
 		result := resp.Process([]byte("\x1b[>c"))
@@ -92,27 +92,6 @@ func TestTerminalResponder_DA2(t *testing.T) {
 	})
 }
 
-func TestTerminalResponder_DSR(t *testing.T) {
-	r, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer r.Close()
-	defer w.Close()
-
-	resp := NewTerminalResponder(w, 80, 24)
-
-	result := resp.Process([]byte("\x1b[6n"))
-	if string(result) != "" {
-		t.Errorf("result = %q, want empty", result)
-	}
-	got := readPipe(r, 100*time.Millisecond)
-	expected := "\x1b[1;1R"
-	if string(got) != expected {
-		t.Errorf("response = %q, want %q", got, expected)
-	}
-}
-
 func TestTerminalResponder_KittyKeyboard(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -121,7 +100,7 @@ func TestTerminalResponder_KittyKeyboard(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 
-	resp := NewTerminalResponder(w, 80, 24)
+	resp := NewTerminalResponder(w)
 
 	result := resp.Process([]byte("\x1b[?u"))
 	if string(result) != "" {
@@ -142,7 +121,7 @@ func TestTerminalResponder_DECRPM(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 
-	resp := NewTerminalResponder(w, 80, 24)
+	resp := NewTerminalResponder(w)
 
 	t.Run("mode 2004", func(t *testing.T) {
 		result := resp.Process([]byte("\x1b[?2004$p"))
@@ -176,7 +155,7 @@ func TestTerminalResponder_NoQueries(t *testing.T) {
 	}
 	defer w.Close()
 
-	resp := NewTerminalResponder(w, 80, 24)
+	resp := NewTerminalResponder(w)
 
 	input := []byte("hello world\x1b[31mred\x1b[0m")
 	result := resp.Process(input)
@@ -193,16 +172,16 @@ func TestTerminalResponder_MultipleQueries(t *testing.T) {
 	defer r.Close()
 	defer w.Close()
 
-	resp := NewTerminalResponder(w, 80, 24)
+	resp := NewTerminalResponder(w)
 
-	// DA1 + DSR + Kitty in one chunk
-	result := resp.Process([]byte("text\x1b[c\x1b[6n\x1b[?umore"))
+	// DA1 + Kitty in one chunk
+	result := resp.Process([]byte("text\x1b[c\x1b[?umore"))
 	if string(result) != "textmore" {
 		t.Errorf("result = %q, want %q", result, "textmore")
 	}
 
 	// Read all responses (may arrive in one or multiple reads)
-	expected := "\x1b[?62;1;2;6;7;8;9;15;22c" + "\x1b[1;1R" + "\x1b[?0u"
+	expected := "\x1b[?62;1;2;6;7;8;9;15;22c" + "\x1b[?0u"
 	var all []byte
 	for len(all) < len(expected) {
 		got := readPipe(r, 200*time.Millisecond)
@@ -224,7 +203,7 @@ func TestTerminalResponder_NoESCFastPath(t *testing.T) {
 	}
 	defer w.Close()
 
-	resp := NewTerminalResponder(w, 80, 24)
+	resp := NewTerminalResponder(w)
 
 	input := []byte("plain text without any escape sequences")
 	result := resp.Process(input)
@@ -234,15 +213,3 @@ func TestTerminalResponder_NoESCFastPath(t *testing.T) {
 	}
 }
 
-func TestTerminalResponder_SetSize(t *testing.T) {
-	_, w, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer w.Close()
-
-	resp := NewTerminalResponder(w, 80, 24)
-	resp.SetSize(120, 40)
-
-	// Verify no panic, size is stored (used for future DSR if we add dynamic cursor position)
-}
