@@ -9,6 +9,7 @@ import (
 const DefaultPollInterval = 50 * time.Millisecond
 
 type ReadFunc func() (output string, position int, err error)
+type SizeFunc func() (int, error)
 
 type Config struct {
 	Pattern       string
@@ -16,6 +17,7 @@ type Config struct {
 	TimeoutSec    int
 	StartPosition int
 	PollInterval  time.Duration
+	SizeFunc      SizeFunc
 }
 
 func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
@@ -41,6 +43,14 @@ func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
 	lastChangeTime := time.Now()
 
 	for time.Now().Before(deadline) {
+		if cfg.SizeFunc != nil {
+			size, sizeErr := cfg.SizeFunc()
+			if sizeErr == nil && size == lastPos {
+				time.Sleep(pollInterval)
+				continue
+			}
+		}
+
 		output, pos, err := readFn()
 		if err != nil {
 			return "", 0, err

@@ -81,7 +81,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 
 	socketDir := filepath.Join(homeDir, ".shelli")
-	if err := os.MkdirAll(socketDir, 0755); err != nil {
+	if err := os.MkdirAll(socketDir, 0700); err != nil {
 		return nil, err
 	}
 
@@ -216,6 +216,7 @@ func (s *Server) Shutdown() {
 			}
 			if cmd, ok := s.cmds[name]; ok {
 				cmd.Process.Kill()
+				cmd.Wait()
 			}
 		}
 	}
@@ -236,6 +237,7 @@ type Request struct {
 	Mode       string   `json:"mode,omitempty"`
 	HeadLines  int      `json:"head_lines,omitempty"`
 	TailLines  int      `json:"tail_lines,omitempty"`
+	Cursor     string   `json:"cursor,omitempty"`
 	Pattern    string   `json:"pattern,omitempty"`
 	Before     int      `json:"before,omitempty"`
 	After      int      `json:"after,omitempty"`
@@ -288,6 +290,8 @@ func (s *Server) handleConn(conn net.Conn) {
 		resp = s.handleClear(req)
 	case "resize":
 		resp = s.handleResize(req)
+	case "size":
+		resp = s.handleSize(req)
 	case "ping":
 		resp = Response{Success: true, Data: "pong"}
 	default:
@@ -534,17 +538,34 @@ func (s *Server) handleRead(req Request) Response {
 			return Response{Success: false, Error: fmt.Sprintf("get size: %v", err)}
 		}
 
-		if meta.ReadPos >= totalLen {
+		readPos := meta.ReadPos
+		if req.Cursor != "" {
+			if meta.Cursors == nil {
+				readPos = 0
+			} else {
+				readPos = meta.Cursors[req.Cursor]
+			}
+		}
+
+		if readPos >= totalLen {
 			result = ""
 		} else {
-			output, err := storage.ReadFrom(req.Name, meta.ReadPos)
+			output, err := storage.ReadFrom(req.Name, readPos)
 			if err != nil {
 				return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
 			}
 			result = string(output)
-			meta.ReadPos = totalLen
-			storage.SaveMeta(req.Name, meta)
 		}
+
+		if req.Cursor != "" {
+			if meta.Cursors == nil {
+				meta.Cursors = make(map[string]int64)
+			}
+			meta.Cursors[req.Cursor] = totalLen
+		} else {
+			meta.ReadPos = totalLen
+		}
+		storage.SaveMeta(req.Name, meta)
 	default:
 		output, err := storage.ReadAll(req.Name)
 		if err != nil {
@@ -555,7 +576,7 @@ func (s *Server) handleRead(req Request) Response {
 	}
 
 	if req.HeadLines > 0 || req.TailLines > 0 {
-		result = limitLines(result, req.HeadLines, req.TailLines)
+		result = LimitLines(result, req.HeadLines, req.TailLines)
 	}
 
 	return Response{Success: true, Data: map[string]interface{}{
@@ -565,7 +586,7 @@ func (s *Server) handleRead(req Request) Response {
 	}}
 }
 
-func limitLines(output string, head, tail int) string {
+func LimitLines(output string, head, tail int) string {
 	if output == "" {
 		return ""
 	}
@@ -747,7 +768,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 
 	result := string(output)
 	if req.HeadLines > 0 || req.TailLines > 0 {
-		result = limitLines(result, req.HeadLines, req.TailLines)
+		result = LimitLines(result, req.HeadLines, req.TailLines)
 	}
 
 	totalLen := int64(len(output))
@@ -820,6 +841,7 @@ func (s *Server) handleStop(req Request) Response {
 		go func() {
 			time.Sleep(KillGracePeriod)
 			proc.Signal(syscall.SIGKILL)
+			cmd.Wait()
 		}()
 		delete(s.cmds, req.Name)
 	}
@@ -863,6 +885,7 @@ func (s *Server) handleKill(req Request) Response {
 			cmd.Process.Signal(syscall.SIGTERM)
 			time.Sleep(KillGracePeriod)
 			cmd.Process.Signal(syscall.SIGKILL)
+			cmd.Wait()
 			delete(s.cmds, req.Name)
 		}
 	}
@@ -873,6 +896,23 @@ func (s *Server) handleKill(req Request) Response {
 	delete(s.responders, req.Name)
 
 	return Response{Success: true}
+}
+
+func (s *Server) handleSize(req Request) Response {
+	s.mu.Lock()
+	_, exists := s.sessions[req.Name]
+	if !exists {
+		s.mu.Unlock()
+		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+	storage := s.storage
+	s.mu.Unlock()
+
+	size, err := storage.Size(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("get size: %v", err)}
+	}
+	return Response{Success: true, Data: map[string]interface{}{"size": size}}
 }
 
 func (s *Server) handleSearch(req Request) Response {

@@ -166,6 +166,10 @@ func (r *ToolRegistry) List() []ToolDef {
 						"type":        "boolean",
 						"description": "Force TUI redraw via resize and read clean frame. Requires TUI mode (--tui on create). Incompatible with all, wait_pattern.",
 					},
+					"cursor": map[string]interface{}{
+						"type":        "string",
+						"description": "Named cursor for per-consumer read tracking. Each cursor maintains its own position.",
+					},
 				},
 				"required": []string{"name"},
 			},
@@ -415,6 +419,7 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 			SettleMs:      settleMs,
 			TimeoutSec:    timeoutSec,
 			StartPosition: startPos,
+			SizeFunc:      func() (int, error) { return r.client.Size(a.Name) },
 		},
 	)
 	if err != nil {
@@ -530,6 +535,7 @@ type ReadArgs struct {
 	TimeoutSec  int    `json:"timeout_sec"`
 	StripAnsi   bool   `json:"strip_ansi"`
 	Snapshot    bool   `json:"snapshot"`
+	Cursor      string `json:"cursor"`
 }
 
 func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
@@ -554,6 +560,14 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 
 	if a.Head < 0 || a.Tail < 0 {
 		return nil, fmt.Errorf("head and tail require positive integers")
+	}
+
+	if a.WaitPattern != "" && a.SettleMs > 0 {
+		return nil, fmt.Errorf("wait_pattern and settle_ms are mutually exclusive")
+	}
+
+	if a.All && (a.WaitPattern != "" || a.SettleMs > 0) {
+		return nil, fmt.Errorf("all cannot be combined with wait_pattern or settle_ms")
 	}
 
 	if a.Snapshot {
@@ -600,16 +614,28 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		}
 
 		output, pos, err := wait.ForOutput(
-			func() (string, int, error) { return r.client.Read(a.Name, "all", a.Head, a.Tail) },
+			func() (string, int, error) { return r.client.Read(a.Name, "all", 0, 0) },
 			wait.Config{
 				Pattern:       a.WaitPattern,
 				SettleMs:      a.SettleMs,
 				TimeoutSec:    timeoutSec,
 				StartPosition: startPos,
+				SizeFunc:      func() (int, error) { return r.client.Size(a.Name) },
 			},
 		)
 		if err != nil {
 			return nil, err
+		}
+
+		// Advance read cursor past returned content (matches CLI behavior)
+		if a.Cursor != "" {
+			r.client.ReadWithCursor(a.Name, "new", a.Cursor, 0, 0)
+		} else {
+			r.client.Read(a.Name, "new", 0, 0)
+		}
+
+		if a.Head > 0 || a.Tail > 0 {
+			output = daemon.LimitLines(output, a.Head, a.Tail)
 		}
 
 		if a.StripAnsi {
@@ -626,7 +652,14 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		}, nil
 	}
 
-	output, pos, err := r.client.Read(a.Name, mode, a.Head, a.Tail)
+	var output string
+	var pos int
+	var err error
+	if a.Cursor != "" {
+		output, pos, err = r.client.ReadWithCursor(a.Name, mode, a.Cursor, a.Head, a.Tail)
+	} else {
+		output, pos, err = r.client.Read(a.Name, mode, a.Head, a.Tail)
+	}
 	if err != nil {
 		return nil, err
 	}

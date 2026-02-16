@@ -16,8 +16,9 @@ type SessionMeta struct {
 	State     SessionState `json:"state"`
 	CreatedAt time.Time    `json:"created_at"`
 	StoppedAt *time.Time   `json:"stopped_at,omitempty"`
-	ReadPos   int64        `json:"read_pos"`
-	Cols      int          `json:"cols"`
+	ReadPos   int64            `json:"read_pos"`
+	Cursors   map[string]int64 `json:"cursors,omitempty"`
+	Cols      int              `json:"cols"`
 	Rows      int          `json:"rows"`
 	TUIMode   bool         `json:"tui_mode,omitempty"`
 }

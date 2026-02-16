@@ -19,9 +19,9 @@ func TestLimitLines(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := limitLines(tt.input, tt.head, tt.tail)
+			got := LimitLines(tt.input, tt.head, tt.tail)
 			if got != tt.expect {
-				t.Errorf("limitLines(%q, %d, %d) = %q, want %q", tt.input, tt.head, tt.tail, got, tt.expect)
+				t.Errorf("LimitLines(%q, %d, %d) = %q, want %q", tt.input, tt.head, tt.tail, got, tt.expect)
 			}
 		})
 	}

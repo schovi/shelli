@@ -321,6 +321,57 @@ func (c *Client) Search(req SearchRequest) (*SearchResponse, error) {
 	return &result, nil
 }
 
+func (c *Client) ReadWithCursor(name, mode, cursor string, headLines, tailLines int) (string, int, error) {
+	resp, err := c.send(Request{
+		Action:    "read",
+		Name:      name,
+		Mode:      mode,
+		Cursor:    cursor,
+		HeadLines: headLines,
+		TailLines: tailLines,
+	})
+	if err != nil {
+		return "", 0, err
+	}
+	if !resp.Success {
+		return "", 0, fmt.Errorf("%s", resp.Error)
+	}
+
+	data, err := extractMapData(resp)
+	if err != nil {
+		return "", 0, err
+	}
+
+	output, ok := data["output"].(string)
+	if !ok {
+		return "", 0, fmt.Errorf("missing or invalid output field")
+	}
+	posFloat, ok := data["position"].(float64)
+	if !ok {
+		return "", 0, fmt.Errorf("missing or invalid position field")
+	}
+	return output, int(posFloat), nil
+}
+
+func (c *Client) Size(name string) (int, error) {
+	resp, err := c.send(Request{Action: "size", Name: name})
+	if err != nil {
+		return 0, err
+	}
+	if !resp.Success {
+		return 0, fmt.Errorf("%s", resp.Error)
+	}
+	data, err := extractMapData(resp)
+	if err != nil {
+		return 0, err
+	}
+	sizeFloat, ok := data["size"].(float64)
+	if !ok {
+		return 0, fmt.Errorf("missing size field")
+	}
+	return int(sizeFloat), nil
+}
+
 func (c *Client) send(req Request) (*Response, error) {
 	conn, err := net.Dial("unix", SocketPath())
 	if err != nil {

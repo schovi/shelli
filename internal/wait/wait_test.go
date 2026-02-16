@@ -222,3 +222,48 @@ func TestForOutput_PositionRegression_Pattern(t *testing.T) {
 		t.Errorf("expected output containing 'ready', got %q", got)
 	}
 }
+
+func TestForOutput_PatternMatchWithLargeStartPosition(t *testing.T) {
+	callCount := 0
+	readFn := func() (string, int, error) {
+		callCount++
+		return "line1\nline2\nready\n", 18, nil
+	}
+	cfg := Config{
+		Pattern:       "ready",
+		TimeoutSec:    1,
+		StartPosition: 0,
+	}
+	got, _, err := ForOutput(readFn, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(got, "ready") {
+		t.Errorf("expected output containing 'ready', got %q", got)
+	}
+}
+
+func TestForOutput_SizeFunc_SkipsReadWhenUnchanged(t *testing.T) {
+	readCount := 0
+	readFn := func() (string, int, error) {
+		readCount++
+		return "output ready", 12, nil
+	}
+	sizeFunc := func() (int, error) {
+		return 12, nil
+	}
+	cfg := Config{
+		Pattern:       "ready",
+		TimeoutSec:    1,
+		StartPosition: 0,
+		PollInterval:  10 * time.Millisecond,
+		SizeFunc:      sizeFunc,
+	}
+	_, _, err := ForOutput(readFn, cfg)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if readCount > 2 {
+		t.Errorf("expected readFn called <=2 times, got %d", readCount)
+	}
+}

@@ -222,11 +222,13 @@ shelli read <name> [flags]
 **Blocking modes** (returns new output):
 - `--wait "pattern"` - Wait for regex pattern match
 - `--settle N` - Wait for N ms of silence
+- `--head N` / `--tail N` - Limit output lines (applied after wait/settle completes)
 
 Other flags:
 - `--timeout N` - Max wait time in seconds (default: 10)
 - `--settle N` - Override default settle time (300ms for snapshot, used with --wait/--settle modes)
 - `--strip-ansi` - Remove terminal escape codes
+- `--cursor "name"` - Named cursor for per-consumer read tracking
 - `--json` - Output as JSON
 
 Examples:
@@ -356,11 +358,11 @@ Sessions have explicit states with clear transitions:
 
 ## Storage
 
-By default, shelli stores session output in files at `/tmp/shelli/`:
+By default, shelli stores session output in files at `~/.shelli/data/`:
 
 ```
-/tmp/shelli/
-├── mysession.out    # raw PTY output
+~/.shelli/data/
+├── mysession.out    # raw PTY output (0600 permissions)
 └── mysession.meta   # JSON metadata (state, pid, timestamps)
 ```
 
@@ -377,7 +379,7 @@ shelli daemon [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--data-dir` | `/tmp/shelli` | Directory for session files |
+| `--data-dir` | `~/.shelli/data` | Directory for session files |
 | `--memory-backend` | `false` | Use in-memory storage (no persistence) |
 | `--stopped-ttl` | (disabled) | Auto-delete stopped sessions after duration |
 | `--max-output` | `10MB` | Buffer size limit (memory backend only) |

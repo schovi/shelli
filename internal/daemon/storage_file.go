@@ -17,7 +17,7 @@ type FileStorage struct {
 }
 
 func NewFileStorage(dataDir string) (*FileStorage, error) {
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(dataDir, 0700); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
 	return &FileStorage{dataDir: dataDir}, nil
@@ -35,7 +35,7 @@ func (s *FileStorage) Append(session string, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	f, err := os.OpenFile(s.outputPath(session), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0644)
+	f, err := os.OpenFile(s.outputPath(session), os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0600)
 	if err != nil {
 		return fmt.Errorf("open output file: %w", err)
 	}
@@ -121,6 +121,7 @@ func (s *FileStorage) Clear(session string) error {
 		return err
 	}
 	meta.ReadPos = 0
+	meta.Cursors = nil
 	return s.saveMetaLocked(session, meta)
 }
 
@@ -149,7 +150,7 @@ func (s *FileStorage) Create(session string, meta *SessionMeta) error {
 		return fmt.Errorf("session %q already exists", session)
 	}
 
-	f, err := os.Create(outPath)
+	f, err := os.OpenFile(outPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
 		return fmt.Errorf("create output file: %w", err)
 	}
@@ -206,7 +207,7 @@ func (s *FileStorage) saveMetaLocked(session string, meta *SessionMeta) error {
 		return fmt.Errorf("marshal meta: %w", err)
 	}
 
-	if err := os.WriteFile(s.metaPath(session), data, 0644); err != nil {
+	if err := os.WriteFile(s.metaPath(session), data, 0600); err != nil {
 		return fmt.Errorf("write meta: %w", err)
 	}
 	return nil
