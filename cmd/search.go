@@ -52,6 +52,10 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		after = searchAroundFlag
 	}
 
+	if before < 0 || after < 0 {
+		return fmt.Errorf("--before, --after, and --around must be non-negative")
+	}
+
 	client := daemon.NewClient()
 	if err := client.EnsureDaemon(); err != nil {
 		return fmt.Errorf("daemon: %w", err)

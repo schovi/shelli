@@ -831,6 +831,10 @@ func (r *ToolRegistry) callSearch(args json.RawMessage) (*CallToolResult, error)
 		after = a.Around
 	}
 
+	if before < 0 || after < 0 {
+		return nil, fmt.Errorf("before, after, and around must be non-negative")
+	}
+
 	resp, err := r.client.Search(daemon.SearchRequest{
 		Name:       a.Name,
 		Pattern:    a.Pattern,
