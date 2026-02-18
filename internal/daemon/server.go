@@ -719,26 +719,9 @@ func (s *Server) handleSnapshot(req Request) Response {
 	}
 
 	deadline := time.Now().Add(timeout)
-	lastChangeTime := time.Now()
-	lastSize := int64(-1)
 
-	for time.Now().Before(deadline) {
-		time.Sleep(SnapshotPollInterval)
-
-		size, err := storage.Size(req.Name)
-		if err != nil {
-			return Response{Success: false, Error: fmt.Sprintf("poll size: %v", err)}
-		}
-
-		if size != lastSize {
-			lastSize = size
-			lastChangeTime = time.Now()
-			continue
-		}
-
-		if size > 0 && time.Since(lastChangeTime) >= settleDuration {
-			break
-		}
+	if _, err := waitForSettle(storage, req.Name, settleDuration, deadline); err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("poll size: %v", err)}
 	}
 
 	output, err := storage.ReadAll(req.Name)
@@ -751,28 +734,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 			cmd.Process.Signal(syscall.SIGWINCH)
 		}
 
-		retrySettle := settleDuration * 2
-		lastChangeTime = time.Now()
-		lastSize = int64(-1)
-
-		for time.Now().Before(deadline) {
-			time.Sleep(SnapshotPollInterval)
-
-			size, err := storage.Size(req.Name)
-			if err != nil {
-				break
-			}
-
-			if size != lastSize {
-				lastSize = size
-				lastChangeTime = time.Now()
-				continue
-			}
-
-			if size > 0 && time.Since(lastChangeTime) >= retrySettle {
-				break
-			}
-		}
+		waitForSettle(storage, req.Name, settleDuration*2, deadline)
 
 		output, err = storage.ReadAll(req.Name)
 		if err != nil {
@@ -1118,6 +1080,27 @@ func (s *Server) handleResize(req Request) Response {
 		"cols": cols,
 		"rows": rows,
 	}}
+}
+
+func waitForSettle(storage OutputStorage, name string, settle time.Duration, deadline time.Time) (int64, error) {
+	lastChangeTime := time.Now()
+	lastSize := int64(-1)
+	for time.Now().Before(deadline) {
+		time.Sleep(SnapshotPollInterval)
+		size, err := storage.Size(name)
+		if err != nil {
+			return 0, err
+		}
+		if size != lastSize {
+			lastSize = size
+			lastChangeTime = time.Now()
+			continue
+		}
+		if size > 0 && time.Since(lastChangeTime) >= settle {
+			return size, nil
+		}
+	}
+	return lastSize, nil
 }
 
 func clampUint16(v int) uint16 {
