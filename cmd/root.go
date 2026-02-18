@@ -9,7 +9,14 @@ import (
 var rootCmd = &cobra.Command{
 	Use:   "shelli",
 	Short: "Shell Interactive - session manager for AI agents",
-	Long:  `shelli (Shell Interactive) enables AI agents to interact with persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.)`,
+	Long: `shelli (Shell Interactive) enables AI agents to interact with persistent interactive shell sessions (REPLs, SSH, database CLIs, etc.)
+
+Quick start:
+  shelli create myshell                     # Start a shell session
+  shelli exec myshell "echo hello"          # Run command and get output
+  shelli read myshell                       # Read new output
+  shelli stop myshell                       # Stop (keeps output)
+  shelli kill myshell                       # Kill (deletes everything)`,
 }
 
 func Execute() {

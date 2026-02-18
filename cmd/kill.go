@@ -17,8 +17,13 @@ func init() {
 var killCmd = &cobra.Command{
 	Use:   "kill <name>",
 	Short: "Kill a session",
-	Args:  cobra.ExactArgs(1),
-	RunE:  runKill,
+	Long: `Kill a session: terminates the process (if running) and permanently deletes all stored output.
+
+To stop a session but keep output accessible for later reading, use 'stop' instead.
+
+This is a destructive operation and cannot be undone.`,
+	Args: cobra.ExactArgs(1),
+	RunE: runKill,
 }
 
 func runKill(cmd *cobra.Command, args []string) error {

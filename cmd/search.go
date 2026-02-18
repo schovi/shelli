@@ -95,13 +95,25 @@ func runSearch(cmd *cobra.Command, args []string) error {
 
 		startLine := match.LineNumber - len(match.Before)
 		for j, line := range match.Before {
-			fmt.Printf("%4d: %s\n", startLine+j, ansi.Strip(line))
+			display := line
+			if searchStripAnsiFlag {
+				display = ansi.Strip(line)
+			}
+			fmt.Printf("%4d: %s\n", startLine+j, display)
 		}
 
-		fmt.Printf(">%3d: %s\n", match.LineNumber, ansi.Strip(match.Line))
+		display := match.Line
+		if searchStripAnsiFlag {
+			display = ansi.Strip(match.Line)
+		}
+		fmt.Printf(">%3d: %s\n", match.LineNumber, display)
 
 		for j, line := range match.After {
-			fmt.Printf("%4d: %s\n", match.LineNumber+1+j, ansi.Strip(line))
+			display := line
+			if searchStripAnsiFlag {
+				display = ansi.Strip(line)
+			}
+			fmt.Printf("%4d: %s\n", match.LineNumber+1+j, display)
 		}
 	}
 

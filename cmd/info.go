@@ -54,6 +54,12 @@ func runInfo(cmd *cobra.Command, args []string) error {
 		fmt.Printf("Buffer:  %d bytes\n", info.BytesBuffered)
 		fmt.Printf("ReadPos: %d\n", info.ReadPosition)
 		fmt.Printf("Size:    %dx%d\n", info.Cols, info.Rows)
+		if len(info.Cursors) > 0 {
+			fmt.Printf("Cursors:\n")
+			for name, pos := range info.Cursors {
+				fmt.Printf("  %s: %d\n", name, pos)
+			}
+		}
 	}
 	return nil
 }

@@ -398,7 +398,7 @@ shelli daemon --stopped-ttl 1h
 
 ## Escape Sequences
 
-When using `send --raw`, escape sequences are interpreted:
+When using `send`, escape sequences are always interpreted:
 
 | Sequence | Character | Description |
 |----------|-----------|-------------|
@@ -425,16 +425,16 @@ When using `send --raw`, escape sequences are interpreted:
 
 ```bash
 # Interrupt a long-running command
-shelli send myshell "\x03" --raw
+shelli send myshell "\x03"
 
 # Send EOF to close stdin
-shelli send myshell "\x04" --raw
+shelli send myshell "\x04"
 
 # Tab completion
-shelli send myshell "doc\t" --raw
+shelli send myshell "doc\t"
 
 # Answer a yes/no prompt without newline, then send newline
-shelli send myshell "y" --raw
+shelli send myshell "y"
 shelli send myshell ""              # just newline
 ```
 

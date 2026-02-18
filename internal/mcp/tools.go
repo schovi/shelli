@@ -61,6 +61,10 @@ var createSchema = map[string]interface{}{
 			"type":        "boolean",
 			"description": "Enable TUI mode for apps like vim, htop. Auto-truncates buffer on frame boundaries to reduce storage.",
 		},
+		"if_not_exists": map[string]interface{}{
+			"type":        "boolean",
+			"description": "If true, return existing running session instead of error when session already exists.",
+		},
 	},
 	"required": []string{"name"},
 }
@@ -309,13 +313,14 @@ func (r *ToolRegistry) Call(name string, args json.RawMessage) (*CallToolResult,
 }
 
 type CreateArgs struct {
-	Name    string   `json:"name"`
-	Command string   `json:"command"`
-	Env     []string `json:"env"`
-	Cwd     string   `json:"cwd"`
-	Cols    int      `json:"cols"`
-	Rows    int      `json:"rows"`
-	TUI     bool     `json:"tui"`
+	Name        string   `json:"name"`
+	Command     string   `json:"command"`
+	Env         []string `json:"env"`
+	Cwd         string   `json:"cwd"`
+	Cols        int      `json:"cols"`
+	Rows        int      `json:"rows"`
+	TUI         bool     `json:"tui"`
+	IfNotExists bool     `json:"if_not_exists"`
 }
 
 func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error) {
@@ -325,12 +330,13 @@ func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error)
 	}
 
 	data, err := r.client.Create(a.Name, daemon.CreateOptions{
-		Command: a.Command,
-		Env:     a.Env,
-		Cwd:     a.Cwd,
-		Cols:    a.Cols,
-		Rows:    a.Rows,
-		TUIMode: a.TUI,
+		Command:     a.Command,
+		Env:         a.Env,
+		Cwd:         a.Cwd,
+		Cols:        a.Cols,
+		Rows:        a.Rows,
+		TUIMode:     a.TUI,
+		IfNotExists: a.IfNotExists,
 	})
 	if err != nil {
 		return nil, err
@@ -345,7 +351,7 @@ func (r *ToolRegistry) callCreate(args json.RawMessage) (*CallToolResult, error)
 type ExecArgs struct {
 	Name        string `json:"name"`
 	Input       string `json:"input"`
-	SettleMs    int    `json:"settle_ms"`
+	SettleMs    *int   `json:"settle_ms"`
 	WaitPattern string `json:"wait_pattern"`
 	TimeoutSec  int    `json:"timeout_sec"`
 	StripAnsi   bool   `json:"strip_ansi"`
@@ -357,7 +363,7 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 		return nil, fmt.Errorf("parse args: %w", err)
 	}
 
-	if a.WaitPattern != "" && a.SettleMs > 0 {
+	if a.WaitPattern != "" && a.SettleMs != nil && *a.SettleMs > 0 {
 		return nil, fmt.Errorf("wait_pattern and settle_ms are mutually exclusive")
 	}
 
@@ -365,14 +371,36 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 		return nil, fmt.Errorf("input is required")
 	}
 
+	settleMs := 0
+	if a.SettleMs != nil {
+		settleMs = *a.SettleMs
+	}
+
 	result, err := r.client.Exec(a.Name, daemon.ExecOptions{
 		Input:       a.Input,
-		SettleMs:    a.SettleMs,
+		SettleMs:    settleMs,
 		WaitPattern: a.WaitPattern,
 		TimeoutSec:  a.TimeoutSec,
+		SettleSet:   a.SettleMs != nil,
 	})
 	if err != nil {
-		return nil, err
+		if result == nil || result.Output == "" {
+			return nil, err
+		}
+		output := result.Output
+		if a.StripAnsi {
+			output = ansi.Strip(output)
+		}
+		data, _ := json.MarshalIndent(map[string]interface{}{
+			"input":    result.Input,
+			"output":   output,
+			"position": result.Position,
+			"warning":  err.Error(),
+		}, "", "  ")
+		return &CallToolResult{
+			Content: []ContentBlock{{Type: "text", Text: string(data)}},
+			IsError: true,
+		}, nil
 	}
 
 	output := result.Output
@@ -519,6 +547,10 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		return nil, fmt.Errorf("all cannot be combined with wait_pattern or settle_ms")
 	}
 
+	if a.Cursor != "" && a.Snapshot {
+		return nil, fmt.Errorf("cursor and snapshot are mutually exclusive")
+	}
+
 	if a.Snapshot {
 		if a.All {
 			return nil, fmt.Errorf("snapshot and all are mutually exclusive")
@@ -572,15 +604,21 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 				SizeFunc:      func() (int, error) { return r.client.Size(a.Name) },
 			},
 		)
+
+		var warning string
 		if err != nil {
-			return nil, err
+			if output == "" {
+				return nil, err
+			}
+			warning = err.Error()
 		}
 
-		// Advance read cursor past returned content (matches CLI behavior)
-		if a.Cursor != "" {
-			r.client.ReadWithCursor(a.Name, "new", a.Cursor, 0, 0)
-		} else {
-			r.client.Read(a.Name, "new", 0, 0)
+		if warning == "" {
+			if a.Cursor != "" {
+				r.client.ReadWithCursor(a.Name, "new", a.Cursor, 0, 0)
+			} else {
+				r.client.Read(a.Name, "new", 0, 0)
+			}
 		}
 
 		if a.Head > 0 || a.Tail > 0 {
@@ -595,9 +633,13 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 			"output":   output,
 			"position": pos,
 		}
+		if warning != "" {
+			result["warning"] = warning
+		}
 		data, _ := json.MarshalIndent(result, "", "  ")
 		return &CallToolResult{
 			Content: []ContentBlock{{Type: "text", Text: string(data)}},
+			IsError: warning != "",
 		}, nil
 	}
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -160,9 +161,12 @@ func (s *Server) recoverSessions() error {
 	return nil
 }
 
-func SocketPath() string {
-	homeDir, _ := os.UserHomeDir()
-	return filepath.Join(homeDir, ".shelli", "shelli.sock")
+func SocketPath() (string, error) {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("get home dir: %w", err)
+	}
+	return filepath.Join(homeDir, ".shelli", "shelli.sock"), nil
 }
 
 func (s *Server) socketPath() string {
@@ -276,9 +280,10 @@ type Request struct {
 	Env        []string `json:"env,omitempty"`
 	Cwd        string   `json:"cwd,omitempty"`
 	TUIMode    bool     `json:"tui_mode,omitempty"`
-	Snapshot   bool     `json:"snapshot,omitempty"`
-	SettleMs   int      `json:"settle_ms,omitempty"`
-	TimeoutSec int      `json:"timeout_sec,omitempty"`
+	Snapshot    bool `json:"snapshot,omitempty"`
+	SettleMs    int  `json:"settle_ms,omitempty"`
+	TimeoutSec  int  `json:"timeout_sec,omitempty"`
+	IfNotExists bool `json:"if_not_exists,omitempty"`
 }
 
 type Response struct {
@@ -354,7 +359,15 @@ func (s *Server) handleCreate(req Request) Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.handles[req.Name]; exists {
+	if h, exists := s.handles[req.Name]; exists {
+		if req.IfNotExists && h.state == StateRunning {
+			return Response{Success: true, Data: map[string]interface{}{
+				"name":    h.name,
+				"pid":     h.pid,
+				"command": h.command,
+				"existed": true,
+			}}
+		}
 		return Response{Success: false, Error: fmt.Sprintf("session %q already exists", req.Name)}
 	}
 
@@ -552,6 +565,10 @@ func (s *Server) handleList() Response {
 		}
 		result = append(result, info)
 	}
+
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].CreatedAt < result[j].CreatedAt
+	})
 
 	return Response{Success: true, Data: result}
 }
@@ -780,8 +797,6 @@ func (s *Server) handleSnapshot(req Request) Response {
 	}
 
 	totalLen := int64(len(output))
-	meta.ReadPos = totalLen
-	storage.SaveMeta(req.Name, meta)
 
 	return Response{Success: true, Data: map[string]interface{}{
 		"output":   result,
@@ -1028,6 +1043,10 @@ func (s *Server) handleInfo(req Request) Response {
 
 	if h.state == StateRunning {
 		result["uptime_seconds"] = time.Since(h.createdAt).Seconds()
+	}
+
+	if len(meta.Cursors) > 0 {
+		result["cursors"] = meta.Cursors
 	}
 
 	return Response{Success: true, Data: result}

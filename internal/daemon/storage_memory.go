@@ -138,6 +138,16 @@ func (s *MemoryStorage) LoadMeta(session string) (*SessionMeta, error) {
 		return nil, fmt.Errorf("session %q not found", session)
 	}
 	copied := *meta
+	if meta.Cursors != nil {
+		copied.Cursors = make(map[string]int64, len(meta.Cursors))
+		for k, v := range meta.Cursors {
+			copied.Cursors[k] = v
+		}
+	}
+	if meta.StoppedAt != nil {
+		t := *meta.StoppedAt
+		copied.StoppedAt = &t
+	}
 	return &copied, nil
 }
 

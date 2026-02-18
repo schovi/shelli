@@ -50,7 +50,16 @@ func (c *Client) EnsureDaemon() error {
 		}
 	}
 
-	return fmt.Errorf("daemon failed to start")
+	sockPath := ""
+	if sp, err := SocketPath(); err == nil {
+		sockPath = sp
+	}
+	if sockPath != "" {
+		if _, err := os.Stat(sockPath); err == nil {
+			return fmt.Errorf("daemon failed to start within %s. Stale socket found at %s. Try: rm %s && shelli daemon", DaemonStartTimeout, sockPath, sockPath)
+		}
+	}
+	return fmt.Errorf("daemon failed to start within %s. Socket: %s. Try: rm %s && shelli daemon", DaemonStartTimeout, sockPath, sockPath)
 }
 
 func (c *Client) Ping() bool {
@@ -59,12 +68,13 @@ func (c *Client) Ping() bool {
 }
 
 type CreateOptions struct {
-	Command string
-	Env     []string
-	Cwd     string
-	Cols    int
-	Rows    int
-	TUIMode bool
+	Command     string
+	Env         []string
+	Cwd         string
+	Cols        int
+	Rows        int
+	TUIMode     bool
+	IfNotExists bool
 }
 
 func (c *Client) Create(name string, opts CreateOptions) (map[string]interface{}, error) {
@@ -73,14 +83,15 @@ func (c *Client) Create(name string, opts CreateOptions) (map[string]interface{}
 	}
 
 	resp, err := c.send(Request{
-		Action:  "create",
-		Name:    name,
-		Command: opts.Command,
-		Env:     opts.Env,
-		Cwd:     opts.Cwd,
-		Cols:    opts.Cols,
-		Rows:    opts.Rows,
-		TUIMode: opts.TUIMode,
+		Action:      "create",
+		Name:        name,
+		Command:     opts.Command,
+		Env:         opts.Env,
+		Cwd:         opts.Cwd,
+		Cols:        opts.Cols,
+		Rows:        opts.Rows,
+		TUIMode:     opts.TUIMode,
+		IfNotExists: opts.IfNotExists,
 	})
 	if err != nil {
 		return nil, err
@@ -241,17 +252,18 @@ type SearchResponse struct {
 }
 
 type InfoResponse struct {
-	Name          string  `json:"name"`
-	State         string  `json:"state"`
-	PID           int     `json:"pid"`
-	Command       string  `json:"command"`
-	CreatedAt     string  `json:"created_at"`
-	StoppedAt     string  `json:"stopped_at,omitempty"`
-	BytesBuffered int64   `json:"bytes_buffered"`
-	ReadPosition  int64   `json:"read_position"`
-	Cols          int     `json:"cols"`
-	Rows          int     `json:"rows"`
-	Uptime        float64 `json:"uptime_seconds,omitempty"`
+	Name          string           `json:"name"`
+	State         string           `json:"state"`
+	PID           int              `json:"pid"`
+	Command       string           `json:"command"`
+	CreatedAt     string           `json:"created_at"`
+	StoppedAt     string           `json:"stopped_at,omitempty"`
+	BytesBuffered int64            `json:"bytes_buffered"`
+	ReadPosition  int64            `json:"read_position"`
+	Cols          int              `json:"cols"`
+	Rows          int              `json:"rows"`
+	Uptime        float64          `json:"uptime_seconds,omitempty"`
+	Cursors       map[string]int64 `json:"cursors,omitempty"`
 }
 
 func (c *Client) Clear(name string) error {
@@ -385,6 +397,7 @@ type ExecOptions struct {
 	SettleMs    int
 	WaitPattern string
 	TimeoutSec  int
+	SettleSet   bool
 }
 
 type ExecResult struct {
@@ -404,7 +417,7 @@ func (c *Client) Exec(name string, opts ExecOptions) (*ExecResult, error) {
 	}
 
 	settleMs := opts.SettleMs
-	if opts.WaitPattern == "" && settleMs == 0 {
+	if opts.WaitPattern == "" && settleMs == 0 && !opts.SettleSet {
 		settleMs = 500
 	}
 
@@ -423,17 +436,25 @@ func (c *Client) Exec(name string, opts ExecOptions) (*ExecResult, error) {
 			SizeFunc:      func() (int, error) { return c.Size(name) },
 		},
 	)
+
+	result := &ExecResult{Input: opts.Input, Output: output, Position: pos}
 	if err != nil {
-		return nil, err
+		return result, err
 	}
 
-	return &ExecResult{Input: opts.Input, Output: output, Position: pos}, nil
+	return result, nil
 }
 
 func (c *Client) send(req Request) (*Response, error) {
-	sockPath := SocketPath()
+	var sockPath string
 	if c.customSocketPath != "" {
 		sockPath = c.customSocketPath
+	} else {
+		var err error
+		sockPath, err = SocketPath()
+		if err != nil {
+			return nil, err
+		}
 	}
 	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
