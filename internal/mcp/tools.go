@@ -11,327 +11,301 @@ import (
 	"github.com/schovi/shelli/internal/wait"
 )
 
+type toolEntry struct {
+	def     ToolDef
+	handler func(json.RawMessage) (*CallToolResult, error)
+}
+
 type ToolRegistry struct {
-	client *daemon.Client
+	client  *daemon.Client
+	entries []toolEntry
+}
+
+func (r *ToolRegistry) register(name, description string, schema map[string]interface{}, handler func(json.RawMessage) (*CallToolResult, error)) {
+	r.entries = append(r.entries, toolEntry{
+		def:     ToolDef{Name: name, Description: description, InputSchema: schema},
+		handler: handler,
+	})
+}
+
+var createSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Unique session name (alphanumeric start, may contain letters, numbers, dots, dashes, underscores; max 64 chars)",
+			"pattern":     "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+		},
+		"command": map[string]interface{}{
+			"type":        "string",
+			"description": "Command to run (e.g., 'python3', 'ssh user@host', 'psql -d mydb'). Defaults to user's shell.",
+		},
+		"env": map[string]interface{}{
+			"type":        "array",
+			"items":       map[string]interface{}{"type": "string"},
+			"description": "Environment variables to set (KEY=VALUE format)",
+		},
+		"cwd": map[string]interface{}{
+			"type":        "string",
+			"description": "Working directory for the session",
+		},
+		"cols": map[string]interface{}{
+			"type":        "integer",
+			"description": "Terminal columns (default: 80)",
+		},
+		"rows": map[string]interface{}{
+			"type":        "integer",
+			"description": "Terminal rows (default: 24)",
+		},
+		"tui": map[string]interface{}{
+			"type":        "boolean",
+			"description": "Enable TUI mode for apps like vim, htop. Auto-truncates buffer on frame boundaries to reduce storage.",
+		},
+	},
+	"required": []string{"name"},
+}
+
+var execSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name",
+		},
+		"input": map[string]interface{}{
+			"type":        "string",
+			"description": "Command to send (newline added automatically, sent as literal text)",
+		},
+		"settle_ms": map[string]interface{}{
+			"type":        "integer",
+			"description": "Wait for N ms of silence (default: 500). Mutually exclusive with wait_pattern.",
+		},
+		"wait_pattern": map[string]interface{}{
+			"type":        "string",
+			"description": "Wait for regex pattern match (e.g., '>>>' for Python prompt). Mutually exclusive with settle_ms.",
+		},
+		"timeout_sec": map[string]interface{}{
+			"type":        "integer",
+			"description": "Max wait time in seconds (default: 10)",
+		},
+		"strip_ansi": map[string]interface{}{
+			"type":        "boolean",
+			"description": "Remove ANSI escape codes from output (default: false)",
+		},
+	},
+	"required": []string{"name", "input"},
+}
+
+var sendSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name",
+		},
+		"input": map[string]interface{}{
+			"type":        "string",
+			"description": "Input to send (escape sequences interpreted). Mutually exclusive with inputs and input_base64.",
+		},
+		"inputs": map[string]interface{}{
+			"type":        "array",
+			"items":       map[string]interface{}{"type": "string"},
+			"description": "PREFERRED for sequences. Send multiple inputs in one call - each as separate PTY write. Use when sending message + Enter (e.g., [\"text\", \"\\r\"]), commands + confirmations, or any multi-step input. More efficient than multiple send calls. Mutually exclusive with input and input_base64.",
+		},
+		"input_base64": map[string]interface{}{
+			"type":        "string",
+			"description": "Input as base64 (for binary data). Sent as single write, no escape interpretation. Mutually exclusive with input and inputs.",
+		},
+	},
+	"required": []string{"name"},
+}
+
+var readSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name",
+		},
+		"all": map[string]interface{}{
+			"type":        "boolean",
+			"description": "If true, read all output from session start. If false (default), read only new output since last read. Mutually exclusive with head/tail.",
+		},
+		"head": map[string]interface{}{
+			"type":        "integer",
+			"description": "Return first N lines of buffer. Mutually exclusive with all/tail.",
+		},
+		"tail": map[string]interface{}{
+			"type":        "integer",
+			"description": "Return last N lines of buffer. Mutually exclusive with all/head.",
+		},
+		"wait_pattern": map[string]interface{}{
+			"type":        "string",
+			"description": "Wait for regex pattern match before returning",
+		},
+		"settle_ms": map[string]interface{}{
+			"type":        "integer",
+			"description": "Wait for N ms of silence before returning",
+		},
+		"timeout_sec": map[string]interface{}{
+			"type":        "integer",
+			"description": "Max wait time in seconds (default: 10, only used with wait_pattern or settle_ms)",
+		},
+		"strip_ansi": map[string]interface{}{
+			"type":        "boolean",
+			"description": "Remove ANSI escape codes from output",
+		},
+		"snapshot": map[string]interface{}{
+			"type":        "boolean",
+			"description": "Force TUI redraw via resize and read clean frame. Requires TUI mode (--tui on create). Incompatible with all, wait_pattern.",
+		},
+		"cursor": map[string]interface{}{
+			"type":        "string",
+			"description": "Named cursor for per-consumer read tracking. Each cursor maintains its own position.",
+		},
+	},
+	"required": []string{"name"},
+}
+
+var listSchema = map[string]interface{}{
+	"type":       "object",
+	"properties": map[string]interface{}{},
+}
+
+var stopSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name to stop",
+		},
+	},
+	"required": []string{"name"},
+}
+
+var killSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name to kill",
+		},
+	},
+	"required": []string{"name"},
+}
+
+var infoSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name",
+		},
+	},
+	"required": []string{"name"},
+}
+
+var clearSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name",
+		},
+	},
+	"required": []string{"name"},
+}
+
+var resizeSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name",
+		},
+		"cols": map[string]interface{}{
+			"type":        "integer",
+			"description": "Terminal columns (optional, keeps current if not specified)",
+		},
+		"rows": map[string]interface{}{
+			"type":        "integer",
+			"description": "Terminal rows (optional, keeps current if not specified)",
+		},
+	},
+	"required": []string{"name"},
+}
+
+var searchSchema = map[string]interface{}{
+	"type": "object",
+	"properties": map[string]interface{}{
+		"name": map[string]interface{}{
+			"type":        "string",
+			"description": "Session name",
+		},
+		"pattern": map[string]interface{}{
+			"type":        "string",
+			"description": "Regex pattern to search for",
+		},
+		"before": map[string]interface{}{
+			"type":        "integer",
+			"description": "Lines of context before each match (default: 0)",
+		},
+		"after": map[string]interface{}{
+			"type":        "integer",
+			"description": "Lines of context after each match (default: 0)",
+		},
+		"around": map[string]interface{}{
+			"type":        "integer",
+			"description": "Lines of context before AND after (shorthand for before+after). Mutually exclusive with before/after.",
+		},
+		"ignore_case": map[string]interface{}{
+			"type":        "boolean",
+			"description": "Case-insensitive search (default: false)",
+		},
+		"strip_ansi": map[string]interface{}{
+			"type":        "boolean",
+			"description": "Strip ANSI escape codes before searching (default: false)",
+		},
+	},
+	"required": []string{"name", "pattern"},
 }
 
 func NewToolRegistry() *ToolRegistry {
-	return &ToolRegistry{
-		client: daemon.NewClient(),
-	}
+	r := &ToolRegistry{client: daemon.NewClient()}
+	r.register("create", "Create a new interactive shell session. Use for REPLs, SSH, database CLIs, or any stateful workflow.", createSchema, r.callCreate)
+	r.register("exec", "Send a command to a session and wait for output. Adds newline automatically, waits for output to settle or pattern match. Input is sent as literal text (no escape interpretation). For TUI apps or precise control, use 'send' with separate arguments: send session \"hello\" \"\\r\"", execSchema, r.callExec)
+	r.register("send", "Send raw input to a session without waiting. Low-level command for precise control. Escape sequences (\\n, \\r, \\x03, etc.) are always interpreted. No newline added automatically.", sendSchema, r.callSend)
+	r.register("read", "Read output from a session. Can read new output, all output, or wait for specific patterns.", readSchema, r.callRead)
+	r.register("list", "List all active sessions with their status", listSchema, func(_ json.RawMessage) (*CallToolResult, error) {
+		return r.callList()
+	})
+	r.register("stop", "Stop a running session but keep output accessible. Use this to preserve session output after process ends.", stopSchema, r.callStop)
+	r.register("kill", "Kill/terminate a session and delete all output. Use 'stop' instead if you want to preserve output.", killSchema, r.callKill)
+	r.register("info", "Get detailed information about a session including state, PID, command, buffer size, terminal dimensions, and uptime", infoSchema, r.callInfo)
+	r.register("clear", "Clear the output buffer of a session and reset the read position. The session continues running.", clearSchema, r.callClear)
+	r.register("resize", "Resize terminal dimensions of a running session. At least one of cols or rows must be specified.", resizeSchema, r.callResize)
+	r.register("search", "Search session output buffer for regex patterns with context lines", searchSchema, r.callSearch)
+	return r
 }
 
 func (r *ToolRegistry) List() []ToolDef {
-	return []ToolDef{
-		{
-			Name:        "create",
-			Description: "Create a new interactive shell session. Use for REPLs, SSH, database CLIs, or any stateful workflow.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Unique session name (alphanumeric start, may contain letters, numbers, dots, dashes, underscores; max 64 chars)",
-						"pattern":     "^[A-Za-z0-9][A-Za-z0-9._-]*$",
-					},
-					"command": map[string]interface{}{
-						"type":        "string",
-						"description": "Command to run (e.g., 'python3', 'ssh user@host', 'psql -d mydb'). Defaults to user's shell.",
-					},
-					"env": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]interface{}{"type": "string"},
-						"description": "Environment variables to set (KEY=VALUE format)",
-					},
-					"cwd": map[string]interface{}{
-						"type":        "string",
-						"description": "Working directory for the session",
-					},
-					"cols": map[string]interface{}{
-						"type":        "integer",
-						"description": "Terminal columns (default: 80)",
-					},
-					"rows": map[string]interface{}{
-						"type":        "integer",
-						"description": "Terminal rows (default: 24)",
-					},
-					"tui": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Enable TUI mode for apps like vim, htop. Auto-truncates buffer on frame boundaries to reduce storage.",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "exec",
-			Description: "Send a command to a session and wait for output. Adds newline automatically, waits for output to settle or pattern match. Input is sent as literal text (no escape interpretation). For TUI apps or precise control, use 'send' with separate arguments: send session \"hello\" \"\\r\"",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name",
-					},
-					"input": map[string]interface{}{
-						"type":        "string",
-						"description": "Command to send (newline added automatically, sent as literal text)",
-					},
-					"settle_ms": map[string]interface{}{
-						"type":        "integer",
-						"description": "Wait for N ms of silence (default: 500). Mutually exclusive with wait_pattern.",
-					},
-					"wait_pattern": map[string]interface{}{
-						"type":        "string",
-						"description": "Wait for regex pattern match (e.g., '>>>' for Python prompt). Mutually exclusive with settle_ms.",
-					},
-					"timeout_sec": map[string]interface{}{
-						"type":        "integer",
-						"description": "Max wait time in seconds (default: 10)",
-					},
-					"strip_ansi": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Remove ANSI escape codes from output (default: false)",
-					},
-				},
-				"required": []string{"name", "input"},
-			},
-		},
-		{
-			Name:        "send",
-			Description: "Send raw input to a session without waiting. Low-level command for precise control. Escape sequences (\\n, \\r, \\x03, etc.) are always interpreted. No newline added automatically.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name",
-					},
-					"input": map[string]interface{}{
-						"type":        "string",
-						"description": "Input to send (escape sequences interpreted). Mutually exclusive with inputs and input_base64.",
-					},
-					"inputs": map[string]interface{}{
-						"type":        "array",
-						"items":       map[string]interface{}{"type": "string"},
-						"description": "PREFERRED for sequences. Send multiple inputs in one call - each as separate PTY write. Use when sending message + Enter (e.g., [\"text\", \"\\r\"]), commands + confirmations, or any multi-step input. More efficient than multiple send calls. Mutually exclusive with input and input_base64.",
-					},
-					"input_base64": map[string]interface{}{
-						"type":        "string",
-						"description": "Input as base64 (for binary data). Sent as single write, no escape interpretation. Mutually exclusive with input and inputs.",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "read",
-			Description: "Read output from a session. Can read new output, all output, or wait for specific patterns.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name",
-					},
-					"all": map[string]interface{}{
-						"type":        "boolean",
-						"description": "If true, read all output from session start. If false (default), read only new output since last read. Mutually exclusive with head/tail.",
-					},
-					"head": map[string]interface{}{
-						"type":        "integer",
-						"description": "Return first N lines of buffer. Mutually exclusive with all/tail.",
-					},
-					"tail": map[string]interface{}{
-						"type":        "integer",
-						"description": "Return last N lines of buffer. Mutually exclusive with all/head.",
-					},
-					"wait_pattern": map[string]interface{}{
-						"type":        "string",
-						"description": "Wait for regex pattern match before returning",
-					},
-					"settle_ms": map[string]interface{}{
-						"type":        "integer",
-						"description": "Wait for N ms of silence before returning",
-					},
-					"timeout_sec": map[string]interface{}{
-						"type":        "integer",
-						"description": "Max wait time in seconds (default: 10, only used with wait_pattern or settle_ms)",
-					},
-					"strip_ansi": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Remove ANSI escape codes from output",
-					},
-					"snapshot": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Force TUI redraw via resize and read clean frame. Requires TUI mode (--tui on create). Incompatible with all, wait_pattern.",
-					},
-					"cursor": map[string]interface{}{
-						"type":        "string",
-						"description": "Named cursor for per-consumer read tracking. Each cursor maintains its own position.",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "list",
-			Description: "List all active sessions with their status",
-			InputSchema: map[string]interface{}{
-				"type":       "object",
-				"properties": map[string]interface{}{},
-			},
-		},
-		{
-			Name:        "stop",
-			Description: "Stop a running session but keep output accessible. Use this to preserve session output after process ends.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name to stop",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "kill",
-			Description: "Kill/terminate a session and delete all output. Use 'stop' instead if you want to preserve output.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name to kill",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "info",
-			Description: "Get detailed information about a session including state, PID, command, buffer size, terminal dimensions, and uptime",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "clear",
-			Description: "Clear the output buffer of a session and reset the read position. The session continues running.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "resize",
-			Description: "Resize terminal dimensions of a running session. At least one of cols or rows must be specified.",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name",
-					},
-					"cols": map[string]interface{}{
-						"type":        "integer",
-						"description": "Terminal columns (optional, keeps current if not specified)",
-					},
-					"rows": map[string]interface{}{
-						"type":        "integer",
-						"description": "Terminal rows (optional, keeps current if not specified)",
-					},
-				},
-				"required": []string{"name"},
-			},
-		},
-		{
-			Name:        "search",
-			Description: "Search session output buffer for regex patterns with context lines",
-			InputSchema: map[string]interface{}{
-				"type": "object",
-				"properties": map[string]interface{}{
-					"name": map[string]interface{}{
-						"type":        "string",
-						"description": "Session name",
-					},
-					"pattern": map[string]interface{}{
-						"type":        "string",
-						"description": "Regex pattern to search for",
-					},
-					"before": map[string]interface{}{
-						"type":        "integer",
-						"description": "Lines of context before each match (default: 0)",
-					},
-					"after": map[string]interface{}{
-						"type":        "integer",
-						"description": "Lines of context after each match (default: 0)",
-					},
-					"around": map[string]interface{}{
-						"type":        "integer",
-						"description": "Lines of context before AND after (shorthand for before+after). Mutually exclusive with before/after.",
-					},
-					"ignore_case": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Case-insensitive search (default: false)",
-					},
-					"strip_ansi": map[string]interface{}{
-						"type":        "boolean",
-						"description": "Strip ANSI escape codes before searching (default: false)",
-					},
-				},
-				"required": []string{"name", "pattern"},
-			},
-		},
+	defs := make([]ToolDef, len(r.entries))
+	for i, e := range r.entries {
+		defs[i] = e.def
 	}
+	return defs
 }
 
 func (r *ToolRegistry) Call(name string, args json.RawMessage) (*CallToolResult, error) {
 	if err := r.client.EnsureDaemon(); err != nil {
 		return nil, fmt.Errorf("daemon: %w", err)
 	}
-
-	switch name {
-	case "create":
-		return r.callCreate(args)
-	case "exec":
-		return r.callExec(args)
-	case "send":
-		return r.callSend(args)
-	case "read":
-		return r.callRead(args)
-	case "list":
-		return r.callList()
-	case "stop":
-		return r.callStop(args)
-	case "kill":
-		return r.callKill(args)
-	case "info":
-		return r.callInfo(args)
-	case "clear":
-		return r.callClear(args)
-	case "resize":
-		return r.callResize(args)
-	case "search":
-		return r.callSearch(args)
-	default:
-		return nil, fmt.Errorf("unknown tool: %s", name)
+	for _, e := range r.entries {
+		if e.def.Name == name {
+			return e.handler(args)
+		}
 	}
+	return nil, fmt.Errorf("unknown tool: %s", name)
 }
 
 type CreateArgs struct {
@@ -391,51 +365,26 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 		return nil, fmt.Errorf("input is required")
 	}
 
-	input := a.Input
-
-	_, startPos, err := r.client.Read(a.Name, "all", 0, 0)
+	result, err := r.client.Exec(a.Name, daemon.ExecOptions{
+		Input:       a.Input,
+		SettleMs:    a.SettleMs,
+		WaitPattern: a.WaitPattern,
+		TimeoutSec:  a.TimeoutSec,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	if err := r.client.Send(a.Name, input, true); err != nil {
-		return nil, err
-	}
-
-	settleMs := a.SettleMs
-	if a.WaitPattern == "" && settleMs == 0 {
-		settleMs = 500
-	}
-
-	timeoutSec := a.TimeoutSec
-	if timeoutSec == 0 {
-		timeoutSec = 10
-	}
-
-	output, pos, err := wait.ForOutput(
-		func() (string, int, error) { return r.client.Read(a.Name, "all", 0, 0) },
-		wait.Config{
-			Pattern:       a.WaitPattern,
-			SettleMs:      settleMs,
-			TimeoutSec:    timeoutSec,
-			StartPosition: startPos,
-			SizeFunc:      func() (int, error) { return r.client.Size(a.Name) },
-		},
-	)
-	if err != nil {
-		return nil, err
-	}
-
+	output := result.Output
 	if a.StripAnsi {
 		output = ansi.Strip(output)
 	}
 
-	result := map[string]interface{}{
-		"input":    input,
+	data, _ := json.MarshalIndent(map[string]interface{}{
+		"input":    result.Input,
 		"output":   output,
-		"position": pos,
-	}
-	data, _ := json.MarshalIndent(result, "", "  ")
+		"position": result.Position,
+	}, "", "  ")
 	return &CallToolResult{
 		Content: []ContentBlock{{Type: "text", Text: string(data)}},
 	}, nil

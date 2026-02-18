@@ -3,11 +3,13 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -32,15 +34,6 @@ func (p *ptyHandle) File() *os.File {
 	return p.f
 }
 
-type Session struct {
-	Name      string       `json:"name"`
-	PID       int          `json:"pid"`
-	Command   string       `json:"command"`
-	State     SessionState `json:"state"`
-	CreatedAt time.Time    `json:"created_at"`
-	StoppedAt *time.Time   `json:"stopped_at,omitempty"`
-}
-
 type SessionInfo struct {
 	Name      string `json:"name"`
 	PID       int    `json:"pid"`
@@ -50,17 +43,28 @@ type SessionInfo struct {
 	StoppedAt string `json:"stopped_at,omitempty"`
 }
 
+type sessionHandle struct {
+	name      string
+	pid       int
+	command   string
+	state     SessionState
+	createdAt time.Time
+	stoppedAt *time.Time
+
+	pty           *ptyHandle
+	cmd           *exec.Cmd
+	done          chan struct{}
+	frameDetector *ansi.FrameDetector
+	responder     *ansi.TerminalResponder
+}
+
 type Server struct {
-	mu             sync.Mutex
-	sessions       map[string]*Session
-	ptys           map[string]*ptyHandle
-	cmds           map[string]*exec.Cmd
-	doneChans      map[string]chan struct{}
-	frameDetectors map[string]*ansi.FrameDetector
-	responders     map[string]*ansi.TerminalResponder
-	socketDir      string
-	storage        OutputStorage
-	listener       net.Listener
+	mu      sync.Mutex
+	handles map[string]*sessionHandle
+
+	socketDir string
+	storage   OutputStorage
+	listener  net.Listener
 
 	stoppedTTL      time.Duration
 	cleanupStopChan chan struct{}
@@ -101,12 +105,7 @@ func NewServer(opts ...ServerOption) (*Server, error) {
 	}
 
 	s := &Server{
-		sessions:        make(map[string]*Session),
-		ptys:            make(map[string]*ptyHandle),
-		cmds:            make(map[string]*exec.Cmd),
-		doneChans:       make(map[string]chan struct{}),
-		frameDetectors:  make(map[string]*ansi.FrameDetector),
-		responders:      make(map[string]*ansi.TerminalResponder),
+		handles:         make(map[string]*sessionHandle),
 		socketDir:       socketDir,
 		storage:         NewMemoryStorage(DefaultMaxOutputSize),
 		cleanupStopChan: make(chan struct{}),
@@ -142,13 +141,13 @@ func (s *Server) recoverSessions() error {
 			s.storage.SaveMeta(name, meta)
 		}
 
-		s.sessions[name] = &Session{
-			Name:      meta.Name,
-			PID:       meta.PID,
-			Command:   meta.Command,
-			State:     meta.State,
-			CreatedAt: meta.CreatedAt,
-			StoppedAt: meta.StoppedAt,
+		s.handles[name] = &sessionHandle{
+			name:      meta.Name,
+			pid:       meta.PID,
+			command:   meta.Command,
+			state:     meta.State,
+			createdAt: meta.CreatedAt,
+			stoppedAt: meta.StoppedAt,
 		}
 	}
 
@@ -208,11 +207,11 @@ func (s *Server) cleanupExpiredSessions() {
 	defer s.mu.Unlock()
 
 	now := time.Now()
-	for name, sess := range s.sessions {
-		if sess.State == StateStopped && sess.StoppedAt != nil {
-			if now.Sub(*sess.StoppedAt) > s.stoppedTTL {
+	for name, h := range s.handles {
+		if h.state == StateStopped && h.stoppedAt != nil {
+			if now.Sub(*h.stoppedAt) > s.stoppedTTL {
 				s.storage.Delete(name)
-				delete(s.sessions, name)
+				delete(s.handles, name)
 			}
 		}
 	}
@@ -224,17 +223,17 @@ func (s *Server) Shutdown() {
 
 	close(s.cleanupStopChan)
 
-	for name, sess := range s.sessions {
-		if sess.State == StateRunning {
-			if done, ok := s.doneChans[name]; ok {
-				close(done)
+	for _, h := range s.handles {
+		if h.state == StateRunning {
+			if h.done != nil {
+				close(h.done)
 			}
-			if handle, ok := s.ptys[name]; ok {
-				handle.Close()
+			if h.pty != nil {
+				h.pty.Close()
 			}
-			if cmd, ok := s.cmds[name]; ok {
-				cmd.Process.Kill()
-				cmd.Wait()
+			if h.cmd != nil {
+				h.cmd.Process.Kill()
+				h.cmd.Wait()
 			}
 		}
 	}
@@ -247,6 +246,7 @@ func (s *Server) Shutdown() {
 }
 
 type Request struct {
+	Version    int      `json:"version,omitempty"`
 	Action     string   `json:"action"`
 	Name       string   `json:"name,omitempty"`
 	Command    string   `json:"command,omitempty"`
@@ -279,10 +279,23 @@ type Response struct {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in handleConn: %v\n%s", r, debug.Stack())
+		}
+	}()
 
 	var req Request
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		s.sendResponse(conn, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	if req.Version != ProtocolVersion && req.Version != 0 {
+		s.sendResponse(conn, Response{
+			Success: false,
+			Error: fmt.Sprintf("protocol version mismatch: client=%d, daemon=%d. Restart daemon with: shelli daemon --stop && shelli daemon", req.Version, ProtocolVersion),
+		})
 		return
 	}
 
@@ -331,7 +344,7 @@ func (s *Server) handleCreate(req Request) Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.sessions[req.Name]; exists {
+	if _, exists := s.handles[req.Name]; exists {
 		return Response{Success: false, Error: fmt.Sprintf("session %q already exists", req.Name)}
 	}
 
@@ -390,45 +403,56 @@ func (s *Server) handleCreate(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("create storage: %v", err)}
 	}
 
-	sess := &Session{
-		Name:      req.Name,
-		PID:       cmd.Process.Pid,
-		Command:   command,
-		State:     StateRunning,
-		CreatedAt: now,
+	h := &sessionHandle{
+		name:      req.Name,
+		pid:       cmd.Process.Pid,
+		command:   command,
+		state:     StateRunning,
+		createdAt: now,
+		pty:       &ptyHandle{f: ptmx},
+		cmd:       cmd,
+		done:      make(chan struct{}),
 	}
-
-	handle := &ptyHandle{f: ptmx}
-	s.sessions[req.Name] = sess
-	s.ptys[req.Name] = handle
-	s.cmds[req.Name] = cmd
-	s.doneChans[req.Name] = make(chan struct{})
 	if req.TUIMode {
-		s.frameDetectors[req.Name] = ansi.NewFrameDetector(ansi.DefaultTUIStrategy())
-		s.responders[req.Name] = ansi.NewTerminalResponder(ptmx)
+		h.frameDetector = ansi.NewFrameDetector(ansi.DefaultTUIStrategy())
+		h.responder = ansi.NewTerminalResponder(ptmx)
 	}
 
-	go s.captureOutput(req.Name, handle, cmd)
+	s.handles[req.Name] = h
+
+	go s.captureOutput(req.Name, h)
 
 	return Response{Success: true, Data: map[string]interface{}{
-		"name":       sess.Name,
-		"pid":        sess.PID,
-		"command":    sess.Command,
-		"created_at": sess.CreatedAt,
+		"name":       h.name,
+		"pid":        h.pid,
+		"command":    h.command,
+		"created_at": h.createdAt,
 		"cols":       cols,
 		"rows":       rows,
 	}}
 }
 
-func (s *Server) captureOutput(name string, handle *ptyHandle, cmd *exec.Cmd) {
+func (s *Server) captureOutput(name string, h *sessionHandle) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in captureOutput[%s]: %v\n%s", name, r, debug.Stack())
+		}
+	}()
+
 	s.mu.Lock()
-	done := s.doneChans[name]
-	detector := s.frameDetectors[name]
-	responder := s.responders[name]
+	done := h.done
+	p := h.pty
+	cmd := h.cmd
+	detector := h.frameDetector
+	responder := h.responder
 	storage := s.storage
 	s.mu.Unlock()
 
-	f := handle.File()
+	if p == nil {
+		return
+	}
+
+	f := p.File()
 
 	if detector != nil {
 		defer func() {
@@ -471,27 +495,25 @@ func (s *Server) captureOutput(name string, handle *ptyHandle, cmd *exec.Cmd) {
 	}
 
 	cmd.Wait()
-	handle.Close()
+	p.Close()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	delete(s.ptys, name)
-	delete(s.cmds, name)
-	delete(s.doneChans, name)
-	delete(s.frameDetectors, name)
-	delete(s.responders, name)
+	h.pty = nil
+	h.cmd = nil
+	h.done = nil
+	h.frameDetector = nil
+	h.responder = nil
 
-	if sess, ok := s.sessions[name]; ok {
-		sess.State = StateStopped
-		now := time.Now()
-		sess.StoppedAt = &now
+	h.state = StateStopped
+	now := time.Now()
+	h.stoppedAt = &now
 
-		if meta, err := s.storage.LoadMeta(name); err == nil {
-			meta.State = StateStopped
-			meta.StoppedAt = &now
-			s.storage.SaveMeta(name, meta)
-		}
+	if meta, err := s.storage.LoadMeta(name); err == nil {
+		meta.State = StateStopped
+		meta.StoppedAt = &now
+		s.storage.SaveMeta(name, meta)
 	}
 }
 
@@ -506,17 +528,17 @@ func (s *Server) handleList() Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	result := make([]SessionInfo, 0, len(s.sessions))
-	for _, sess := range s.sessions {
+	result := make([]SessionInfo, 0, len(s.handles))
+	for _, h := range s.handles {
 		info := SessionInfo{
-			Name:      sess.Name,
-			PID:       sess.PID,
-			Command:   sess.Command,
-			CreatedAt: sess.CreatedAt.Format(time.RFC3339),
-			State:     string(sess.State),
+			Name:      h.name,
+			PID:       h.pid,
+			Command:   h.command,
+			CreatedAt: h.createdAt.Format(time.RFC3339),
+			State:     string(h.state),
 		}
-		if sess.StoppedAt != nil {
-			info.StoppedAt = sess.StoppedAt.Format(time.RFC3339)
+		if h.stoppedAt != nil {
+			info.StoppedAt = h.stoppedAt.Format(time.RFC3339)
 		}
 		result = append(result, info)
 	}
@@ -530,12 +552,12 @@ func (s *Server) handleRead(req Request) Response {
 	}
 
 	s.mu.Lock()
-	sess, exists := s.sessions[req.Name]
+	h, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
-	sessState := sess.State
+	sessState := h.state
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -633,27 +655,25 @@ func LimitLines(output string, head, tail int) string {
 
 func (s *Server) handleSnapshot(req Request) Response {
 	s.mu.Lock()
-	sess, exists := s.sessions[req.Name]
+	h, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
-	if sess.State != StateRunning {
+	if h.state != StateRunning {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is not running (snapshot requires a running TUI session)", req.Name)}
 	}
-	_, hasFD := s.frameDetectors[req.Name]
-	if !hasFD {
+	if h.frameDetector == nil {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is not in TUI mode (snapshot requires --tui)", req.Name)}
 	}
-	handle, ok := s.ptys[req.Name]
-	if !ok {
+	if h.pty == nil {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q PTY not available", req.Name)}
 	}
-	ptmx := handle.File()
-	cmd := s.cmds[req.Name]
+	ptmx := h.pty.File()
+	cmd := h.cmd
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -662,8 +682,6 @@ func (s *Server) handleSnapshot(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
 	}
 
-	// Cold start: if storage is empty, wait up to 2s for the app to produce initial content.
-	// This handles the case where snapshot is called before the app has rendered anything.
 	if sz, _ := storage.Size(req.Name); sz == 0 {
 		coldDeadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(coldDeadline) {
@@ -674,20 +692,17 @@ func (s *Server) handleSnapshot(req Request) Response {
 		}
 	}
 
-	// Clear storage and reset frame detector before resize cycle.
-	// This ensures the settle loop starts from size=0 and waits for fresh data,
-	// preventing races where captureOutput's Clear+Append can be seen as empty.
 	storage.Clear(req.Name)
 	s.mu.Lock()
-	if fd, ok := s.frameDetectors[req.Name]; ok {
-		fd.Reset()
-		fd.SetSnapshotMode(true)
+	if h.frameDetector != nil {
+		h.frameDetector.Reset()
+		h.frameDetector.SetSnapshotMode(true)
 	}
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		if fd, ok := s.frameDetectors[req.Name]; ok {
-			fd.SetSnapshotMode(false)
+		if h.frameDetector != nil {
+			h.frameDetector.SetSnapshotMode(false)
 		}
 		s.mu.Unlock()
 	}()
@@ -726,26 +741,9 @@ func (s *Server) handleSnapshot(req Request) Response {
 	}
 
 	deadline := time.Now().Add(timeout)
-	lastChangeTime := time.Now()
-	lastSize := int64(-1)
 
-	for time.Now().Before(deadline) {
-		time.Sleep(SnapshotPollInterval)
-
-		size, err := storage.Size(req.Name)
-		if err != nil {
-			return Response{Success: false, Error: fmt.Sprintf("poll size: %v", err)}
-		}
-
-		if size != lastSize {
-			lastSize = size
-			lastChangeTime = time.Now()
-			continue
-		}
-
-		if size > 0 && time.Since(lastChangeTime) >= settleDuration {
-			break
-		}
+	if err := waitForSettle(storage, req.Name, settleDuration, deadline); err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("poll size: %v", err)}
 	}
 
 	output, err := storage.ReadAll(req.Name)
@@ -753,34 +751,12 @@ func (s *Server) handleSnapshot(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
 	}
 
-	// Retry once if empty and time remains: some apps need a second SIGWINCH nudge
 	if len(output) == 0 && time.Now().Before(deadline) {
 		if cmd != nil && cmd.Process != nil {
 			cmd.Process.Signal(syscall.SIGWINCH)
 		}
 
-		retrySettle := settleDuration * 2
-		lastChangeTime = time.Now()
-		lastSize = int64(-1)
-
-		for time.Now().Before(deadline) {
-			time.Sleep(SnapshotPollInterval)
-
-			size, err := storage.Size(req.Name)
-			if err != nil {
-				break
-			}
-
-			if size != lastSize {
-				lastSize = size
-				lastChangeTime = time.Now()
-				continue
-			}
-
-			if size > 0 && time.Since(lastChangeTime) >= retrySettle {
-				break
-			}
-		}
+		waitForSettle(storage, req.Name, settleDuration*2, deadline)
 
 		output, err = storage.ReadAll(req.Name)
 		if err != nil {
@@ -800,25 +776,25 @@ func (s *Server) handleSnapshot(req Request) Response {
 	return Response{Success: true, Data: map[string]interface{}{
 		"output":   result,
 		"position": totalLen,
-		"state":    sess.State,
+		"state":    h.state,
 	}}
 }
 
 func (s *Server) handleSend(req Request) Response {
 	s.mu.Lock()
-	sess, ok := s.sessions[req.Name]
+	h, ok := s.handles[req.Name]
 	if !ok {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
-	if sess.State != StateRunning {
+	if h.state != StateRunning {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is stopped", req.Name)}
 	}
-	handle, ok := s.ptys[req.Name]
+	p := h.pty
 	s.mu.Unlock()
 
-	if !ok {
+	if p == nil {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not running", req.Name)}
 	}
 
@@ -827,7 +803,7 @@ func (s *Server) handleSend(req Request) Response {
 		data += "\n"
 	}
 
-	if _, err := handle.File().WriteString(data); err != nil {
+	if _, err := p.File().WriteString(data); err != nil {
 		return Response{Success: false, Error: err.Error()}
 	}
 
@@ -838,41 +814,42 @@ func (s *Server) handleStop(req Request) Response {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	sess, exists := s.sessions[req.Name]
+	h, exists := s.handles[req.Name]
 	if !exists {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 
-	if sess.State == StateStopped {
+	if h.state == StateStopped {
 		return Response{Success: true, Data: "already stopped"}
 	}
 
-	if done, ok := s.doneChans[req.Name]; ok {
-		close(done)
-		delete(s.doneChans, req.Name)
+	if h.done != nil {
+		close(h.done)
+		h.done = nil
 	}
 
-	if handle, ok := s.ptys[req.Name]; ok {
-		handle.Close()
-		delete(s.ptys, req.Name)
+	if h.pty != nil {
+		h.pty.Close()
+		h.pty = nil
 	}
 
-	if cmd, ok := s.cmds[req.Name]; ok {
+	if h.cmd != nil {
+		cmd := h.cmd
 		proc := cmd.Process
+		h.cmd = nil
 		proc.Signal(syscall.SIGTERM)
 		go func() {
 			time.Sleep(KillGracePeriod)
 			proc.Signal(syscall.SIGKILL)
 			cmd.Wait()
 		}()
-		delete(s.cmds, req.Name)
 	}
-	delete(s.frameDetectors, req.Name)
-	delete(s.responders, req.Name)
+	h.frameDetector = nil
+	h.responder = nil
 
-	sess.State = StateStopped
+	h.state = StateStopped
 	now := time.Now()
-	sess.StoppedAt = &now
+	h.stoppedAt = &now
 
 	if meta, err := s.storage.LoadMeta(req.Name); err == nil {
 		meta.State = StateStopped
@@ -886,32 +863,27 @@ func (s *Server) handleStop(req Request) Response {
 func (s *Server) handleKill(req Request) Response {
 	s.mu.Lock()
 
-	sess, exists := s.sessions[req.Name]
+	h, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 
 	var proc *os.Process
-	if sess.State == StateRunning {
-		if done, ok := s.doneChans[req.Name]; ok {
-			close(done)
-			delete(s.doneChans, req.Name)
+	if h.state == StateRunning {
+		if h.done != nil {
+			close(h.done)
 		}
-		if handle, ok := s.ptys[req.Name]; ok {
-			handle.Close()
-			delete(s.ptys, req.Name)
+		if h.pty != nil {
+			h.pty.Close()
 		}
-		if cmd, ok := s.cmds[req.Name]; ok {
-			proc = cmd.Process
-			delete(s.cmds, req.Name)
+		if h.cmd != nil {
+			proc = h.cmd.Process
 		}
 	}
 
 	s.storage.Delete(req.Name)
-	delete(s.sessions, req.Name)
-	delete(s.frameDetectors, req.Name)
-	delete(s.responders, req.Name)
+	delete(s.handles, req.Name)
 	s.mu.Unlock()
 
 	if proc != nil {
@@ -928,7 +900,7 @@ func (s *Server) handleKill(req Request) Response {
 
 func (s *Server) handleSize(req Request) Response {
 	s.mu.Lock()
-	_, exists := s.sessions[req.Name]
+	_, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
@@ -949,7 +921,7 @@ func (s *Server) handleSearch(req Request) Response {
 	}
 
 	s.mu.Lock()
-	_, exists := s.sessions[req.Name]
+	_, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
@@ -1012,7 +984,7 @@ func (s *Server) handleSearch(req Request) Response {
 
 func (s *Server) handleInfo(req Request) Response {
 	s.mu.Lock()
-	sess, exists := s.sessions[req.Name]
+	h, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
@@ -1031,11 +1003,11 @@ func (s *Server) handleInfo(req Request) Response {
 	}
 
 	result := map[string]interface{}{
-		"name":           sess.Name,
-		"state":          string(sess.State),
-		"pid":            sess.PID,
-		"command":        sess.Command,
-		"created_at":     sess.CreatedAt.Format(time.RFC3339),
+		"name":           h.name,
+		"state":          string(h.state),
+		"pid":            h.pid,
+		"command":        h.command,
+		"created_at":     h.createdAt.Format(time.RFC3339),
 		"bytes_buffered": size,
 		"read_position":  meta.ReadPos,
 		"cols":           meta.Cols,
@@ -1043,12 +1015,12 @@ func (s *Server) handleInfo(req Request) Response {
 		"tui_mode":       meta.TUIMode,
 	}
 
-	if sess.StoppedAt != nil {
-		result["stopped_at"] = sess.StoppedAt.Format(time.RFC3339)
+	if h.stoppedAt != nil {
+		result["stopped_at"] = h.stoppedAt.Format(time.RFC3339)
 	}
 
-	if sess.State == StateRunning {
-		result["uptime_seconds"] = time.Since(sess.CreatedAt).Seconds()
+	if h.state == StateRunning {
+		result["uptime_seconds"] = time.Since(h.createdAt).Seconds()
 	}
 
 	return Response{Success: true, Data: result}
@@ -1056,7 +1028,7 @@ func (s *Server) handleInfo(req Request) Response {
 
 func (s *Server) handleClear(req Request) Response {
 	s.mu.Lock()
-	_, exists := s.sessions[req.Name]
+	_, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
@@ -1077,19 +1049,19 @@ func (s *Server) handleResize(req Request) Response {
 	}
 
 	s.mu.Lock()
-	sess, exists := s.sessions[req.Name]
+	h, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 
-	if sess.State != StateRunning {
+	if h.state != StateRunning {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is stopped", req.Name)}
 	}
 
-	handle, ok := s.ptys[req.Name]
-	if !ok {
+	p := h.pty
+	if p == nil {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not running", req.Name)}
 	}
@@ -1110,15 +1082,13 @@ func (s *Server) handleResize(req Request) Response {
 		rows = meta.Rows
 	}
 
-	if err := pty.Setsize(handle.File(), &pty.Winsize{Cols: clampUint16(cols), Rows: clampUint16(rows)}); err != nil {
+	if err := pty.Setsize(p.File(), &pty.Winsize{Cols: clampUint16(cols), Rows: clampUint16(rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize: %v", err)}
 	}
 
-	// Send SIGWINCH explicitly to ensure the process receives it
-	// (pty.Setsize should trigger this via kernel, but explicit signal is more reliable)
 	s.mu.Lock()
-	if cmd, ok := s.cmds[req.Name]; ok && cmd.Process != nil {
-		cmd.Process.Signal(syscall.SIGWINCH)
+	if h.cmd != nil && h.cmd.Process != nil {
+		h.cmd.Process.Signal(syscall.SIGWINCH)
 	}
 	s.mu.Unlock()
 
@@ -1132,6 +1102,27 @@ func (s *Server) handleResize(req Request) Response {
 		"cols": cols,
 		"rows": rows,
 	}}
+}
+
+func waitForSettle(storage OutputStorage, name string, settle time.Duration, deadline time.Time) error {
+	lastChangeTime := time.Now()
+	lastSize := int64(-1)
+	for time.Now().Before(deadline) {
+		time.Sleep(SnapshotPollInterval)
+		size, err := storage.Size(name)
+		if err != nil {
+			return err
+		}
+		if size != lastSize {
+			lastSize = size
+			lastChangeTime = time.Now()
+			continue
+		}
+		if size > 0 && time.Since(lastChangeTime) >= settle {
+			return nil
+		}
+	}
+	return nil
 }
 
 func clampUint16(v int) uint16 {

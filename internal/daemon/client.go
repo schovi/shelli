@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"time"
+
+	"github.com/schovi/shelli/internal/wait"
 )
 
 type Client struct{}
@@ -372,6 +374,56 @@ func (c *Client) Size(name string) (int, error) {
 	return int(sizeFloat), nil
 }
 
+type ExecOptions struct {
+	Input       string
+	SettleMs    int
+	WaitPattern string
+	TimeoutSec  int
+}
+
+type ExecResult struct {
+	Input    string
+	Output   string
+	Position int
+}
+
+func (c *Client) Exec(name string, opts ExecOptions) (*ExecResult, error) {
+	_, startPos, err := c.Read(name, "all", 0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := c.Send(name, opts.Input, true); err != nil {
+		return nil, err
+	}
+
+	settleMs := opts.SettleMs
+	if opts.WaitPattern == "" && settleMs == 0 {
+		settleMs = 500
+	}
+
+	timeoutSec := opts.TimeoutSec
+	if timeoutSec == 0 {
+		timeoutSec = 10
+	}
+
+	output, pos, err := wait.ForOutput(
+		func() (string, int, error) { return c.Read(name, "all", 0, 0) },
+		wait.Config{
+			Pattern:       opts.WaitPattern,
+			SettleMs:      settleMs,
+			TimeoutSec:    timeoutSec,
+			StartPosition: startPos,
+			SizeFunc:      func() (int, error) { return c.Size(name) },
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return &ExecResult{Input: opts.Input, Output: output, Position: pos}, nil
+}
+
 func (c *Client) send(req Request) (*Response, error) {
 	conn, err := net.Dial("unix", SocketPath())
 	if err != nil {
@@ -380,6 +432,8 @@ func (c *Client) send(req Request) (*Response, error) {
 	defer conn.Close()
 
 	conn.SetDeadline(time.Now().Add(ClientDeadline))
+
+	req.Version = ProtocolVersion
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return nil, err

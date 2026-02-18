@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,6 +23,7 @@ var (
 	daemonDataDirFlag     string
 	daemonMemoryBackend   bool
 	daemonStoppedTTLFlag  string
+	daemonLogFileFlag     string
 )
 
 var daemonCmd = &cobra.Command{
@@ -42,11 +44,25 @@ func init() {
 		"Use in-memory storage instead of file-based (no persistence)")
 	daemonCmd.Flags().StringVar(&daemonStoppedTTLFlag, "stopped-ttl", "",
 		"Auto-cleanup stopped sessions after duration (e.g., 5m, 1h, 24h)")
+	daemonCmd.Flags().StringVar(&daemonLogFileFlag, "log-file", "",
+		"Write daemon logs to file (default: discard)")
 }
 
 func runDaemon(cmd *cobra.Command, args []string) error {
 	if daemonMCPFlag {
 		return runMCPServer()
+	}
+
+	if daemonLogFileFlag != "" {
+		f, err := os.OpenFile(daemonLogFileFlag, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+		if err != nil {
+			return fmt.Errorf("open log file: %w", err)
+		}
+		defer f.Close()
+		log.SetOutput(f)
+		log.SetFlags(log.Ldate | log.Ltime | log.Lmicroseconds)
+		os.Stderr = f
+		log.Println("daemon starting")
 	}
 
 	var opts []daemon.ServerOption
