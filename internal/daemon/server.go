@@ -84,6 +84,12 @@ func WithStoppedTTL(ttl time.Duration) ServerOption {
 	}
 }
 
+func WithSocketDir(dir string) ServerOption {
+	return func(s *Server) {
+		s.socketDir = dir
+	}
+}
+
 // Deprecated: use WithStorage instead
 func WithMaxOutputSize(size int) ServerOption {
 	return func(s *Server) {
@@ -159,8 +165,12 @@ func SocketPath() string {
 	return filepath.Join(homeDir, ".shelli", "shelli.sock")
 }
 
+func (s *Server) socketPath() string {
+	return filepath.Join(s.socketDir, "shelli.sock")
+}
+
 func (s *Server) Start() error {
-	sockPath := SocketPath()
+	sockPath := s.socketPath()
 	os.Remove(sockPath)
 
 	listener, err := net.Listen("unix", sockPath)
@@ -242,7 +252,7 @@ func (s *Server) Shutdown() {
 		s.listener.Close()
 		s.listener = nil
 	}
-	os.Remove(SocketPath())
+	os.Remove(s.socketPath())
 }
 
 type Request struct {
@@ -834,14 +844,12 @@ func (s *Server) handleStop(req Request) Response {
 	}
 
 	if h.cmd != nil {
-		cmd := h.cmd
-		proc := cmd.Process
+		proc := h.cmd.Process
 		h.cmd = nil
 		proc.Signal(syscall.SIGTERM)
 		go func() {
 			time.Sleep(KillGracePeriod)
 			proc.Signal(syscall.SIGKILL)
-			cmd.Wait()
 		}()
 	}
 	h.frameDetector = nil
@@ -891,7 +899,6 @@ func (s *Server) handleKill(req Request) Response {
 			proc.Signal(syscall.SIGTERM)
 			time.Sleep(KillGracePeriod)
 			proc.Signal(syscall.SIGKILL)
-			proc.Wait()
 		}()
 	}
 
