@@ -7,7 +7,6 @@ import (
 
 	"github.com/schovi/shelli/internal/ansi"
 	"github.com/schovi/shelli/internal/daemon"
-	"github.com/schovi/shelli/internal/wait"
 	"github.com/spf13/cobra"
 )
 
@@ -59,49 +58,35 @@ func runExec(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("daemon: %w", err)
 	}
 
-	_, startPos, err := client.Read(name, "all", 0, 0)
-	if err != nil {
-		return err
-	}
-
-	if err := client.Send(name, input, true); err != nil {
-		return err
-	}
-
 	var pattern string
 	var settleMs int
 
 	if hasWait {
 		pattern = execWaitFlag
-		settleMs = 0
 	} else {
-		pattern = ""
 		settleMs = execSettleFlag
 	}
 
-	output, pos, err := wait.ForOutput(
-		func() (string, int, error) { return client.Read(name, "all", 0, 0) },
-		wait.Config{
-			Pattern:       pattern,
-			SettleMs:      settleMs,
-			TimeoutSec:    execTimeoutFlag,
-			StartPosition: startPos,
-			SizeFunc:      func() (int, error) { return client.Size(name) },
-		},
-	)
+	result, err := client.Exec(name, daemon.ExecOptions{
+		Input:       input,
+		SettleMs:    settleMs,
+		WaitPattern: pattern,
+		TimeoutSec:  execTimeoutFlag,
+	})
 	if err != nil {
 		return err
 	}
 
+	output := result.Output
 	if execStripAnsiFlag {
 		output = ansi.Strip(output)
 	}
 
 	if execJsonFlag {
 		out := map[string]interface{}{
-			"input":    input,
+			"input":    result.Input,
 			"output":   output,
-			"position": pos,
+			"position": result.Position,
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
