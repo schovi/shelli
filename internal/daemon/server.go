@@ -477,6 +477,30 @@ func (s *Server) captureOutput(name string, h *sessionHandle) {
 
 	f := p.File()
 
+	defer func() {
+		cmd.Wait()
+		p.Close()
+
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		h.pty = nil
+		h.cmd = nil
+		h.done = nil
+		h.frameDetector = nil
+		h.responder = nil
+
+		h.state = StateStopped
+		now := time.Now()
+		h.stoppedAt = &now
+
+		if meta, err := s.storage.LoadMeta(name); err == nil {
+			meta.State = StateStopped
+			meta.StoppedAt = &now
+			s.storage.SaveMeta(name, meta)
+		}
+	}()
+
 	if detector != nil {
 		defer func() {
 			if pending := detector.Flush(); len(pending) > 0 {
@@ -513,30 +537,8 @@ func (s *Server) captureOutput(name string, h *sessionHandle) {
 			}
 		}
 		if err != nil && !isTimeout(err) {
-			break
+			return
 		}
-	}
-
-	cmd.Wait()
-	p.Close()
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	h.pty = nil
-	h.cmd = nil
-	h.done = nil
-	h.frameDetector = nil
-	h.responder = nil
-
-	h.state = StateStopped
-	now := time.Now()
-	h.stoppedAt = &now
-
-	if meta, err := s.storage.LoadMeta(name); err == nil {
-		meta.State = StateStopped
-		meta.StoppedAt = &now
-		s.storage.SaveMeta(name, meta)
 	}
 }
 
