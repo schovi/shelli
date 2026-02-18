@@ -16,13 +16,14 @@ var createCmd = &cobra.Command{
 }
 
 var (
-	createCmdFlag  string
-	createJsonFlag bool
-	createEnvFlag  []string
-	createCwdFlag  string
-	createColsFlag int
-	createRowsFlag int
-	createTUIFlag  bool
+	createCmdFlag         string
+	createJsonFlag        bool
+	createEnvFlag         []string
+	createCwdFlag         string
+	createColsFlag        int
+	createRowsFlag        int
+	createTUIFlag         bool
+	createIfNotExistsFlag bool
 )
 
 func init() {
@@ -33,6 +34,7 @@ func init() {
 	createCmd.Flags().IntVar(&createColsFlag, "cols", 80, "Terminal columns")
 	createCmd.Flags().IntVar(&createRowsFlag, "rows", 24, "Terminal rows")
 	createCmd.Flags().BoolVar(&createTUIFlag, "tui", false, "Enable TUI mode (auto-truncate buffer on frame boundaries)")
+	createCmd.Flags().BoolVar(&createIfNotExistsFlag, "if-not-exists", false, "Return existing session if already running instead of error")
 }
 
 func runCreate(cmd *cobra.Command, args []string) error {
@@ -44,12 +46,13 @@ func runCreate(cmd *cobra.Command, args []string) error {
 	}
 
 	data, err := client.Create(name, daemon.CreateOptions{
-		Command: createCmdFlag,
-		Env:     createEnvFlag,
-		Cwd:     createCwdFlag,
-		Cols:    createColsFlag,
-		Rows:    createRowsFlag,
-		TUIMode: createTUIFlag,
+		Command:     createCmdFlag,
+		Env:         createEnvFlag,
+		Cwd:         createCwdFlag,
+		Cols:        createColsFlag,
+		Rows:        createRowsFlag,
+		TUIMode:     createTUIFlag,
+		IfNotExists: createIfNotExistsFlag,
 	})
 	if err != nil {
 		return err

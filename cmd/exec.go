@@ -3,6 +3,7 @@ package cmd
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/schovi/shelli/internal/ansi"
@@ -74,7 +75,10 @@ func runExec(cmd *cobra.Command, args []string) error {
 		TimeoutSec:  execTimeoutFlag,
 	})
 	if err != nil {
-		return err
+		if result == nil || result.Output == "" {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 	}
 
 	output := result.Output

@@ -89,6 +89,10 @@ func runRead(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("--wait and --settle are mutually exclusive")
 	}
 
+	if readCursorFlag != "" && (readSnapshotFlag || readFollowFlag) {
+		return fmt.Errorf("--cursor cannot be combined with --snapshot or --follow")
+	}
+
 	if readSnapshotFlag {
 		if readFollowFlag || readAllFlag || hasWait {
 			return fmt.Errorf("--snapshot cannot be combined with --follow, --all, or --wait")
@@ -136,9 +140,13 @@ func runRead(cmd *cobra.Command, args []string) error {
 				output = daemon.LimitLines(output, headLines, tailLines)
 			}
 			if readCursorFlag != "" {
-				client.ReadWithCursor(name, "new", readCursorFlag, 0, 0)
+				if _, _, advErr := client.ReadWithCursor(name, "new", readCursorFlag, 0, 0); advErr != nil {
+					return fmt.Errorf("advance cursor: %w", advErr)
+				}
 			} else {
-				client.Read(name, "new", 0, 0)
+				if _, _, advErr := client.Read(name, "new", 0, 0); advErr != nil {
+					return fmt.Errorf("advance read position: %w", advErr)
+				}
 			}
 		}
 	} else {

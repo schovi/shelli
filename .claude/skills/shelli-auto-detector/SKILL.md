@@ -209,8 +209,8 @@ shelli read openclaw --strip-ansi
 | `npm test` | Bash | Exits with status |
 | `npm run dev` + "watch for errors" | shelli | Long-running |
 | `openclaw tui` | shelli | TUI with two-step submit |
-| `vim file.txt` | Bash (not shelli) | Full-screen TUI, use `sed`/`Edit` |
-| `htop` | Bash (not shelli) | Full-screen TUI, use `ps aux` |
+| `vim file.txt` | shelli (--tui) | Full-screen TUI, use TUI mode with snapshot |
+| `htop` | shelli (--tui) | Full-screen TUI, use TUI mode with snapshot |
 
 ## Proactive Suggestions
 
