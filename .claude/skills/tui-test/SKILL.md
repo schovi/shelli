@@ -38,7 +38,7 @@ The lead agent (you) does the following:
 
 ### Phase 2: Parallel Testing
 
-Spawn one teammate per app (max 5-6 concurrent to avoid system overload). Use `general-purpose` agent type with `bypassPermissions` mode.
+Spawn one teammate per app (max 5-6 concurrent to avoid system overload). Use `general-purpose` agent type with `bypassPermissions` mode and `model: "sonnet"` (cheaper, sufficient for mechanical test execution).
 
 Each teammate gets:
 - The **Teammate Test Protocol** section below (copy it fully into the prompt)

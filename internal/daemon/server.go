@@ -3,11 +3,13 @@ package daemon
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"syscall"
@@ -277,6 +279,11 @@ type Response struct {
 
 func (s *Server) handleConn(conn net.Conn) {
 	defer conn.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in handleConn: %v\n%s", r, debug.Stack())
+		}
+	}()
 
 	var req Request
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
@@ -426,6 +433,12 @@ func (s *Server) handleCreate(req Request) Response {
 }
 
 func (s *Server) captureOutput(name string, h *sessionHandle) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("PANIC in captureOutput[%s]: %v\n%s", name, r, debug.Stack())
+		}
+	}()
+
 	s.mu.Lock()
 	done := h.done
 	p := h.pty
@@ -729,7 +742,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 
 	deadline := time.Now().Add(timeout)
 
-	if _, err := waitForSettle(storage, req.Name, settleDuration, deadline); err != nil {
+	if err := waitForSettle(storage, req.Name, settleDuration, deadline); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("poll size: %v", err)}
 	}
 
@@ -1091,14 +1104,14 @@ func (s *Server) handleResize(req Request) Response {
 	}}
 }
 
-func waitForSettle(storage OutputStorage, name string, settle time.Duration, deadline time.Time) (int64, error) {
+func waitForSettle(storage OutputStorage, name string, settle time.Duration, deadline time.Time) error {
 	lastChangeTime := time.Now()
 	lastSize := int64(-1)
 	for time.Now().Before(deadline) {
 		time.Sleep(SnapshotPollInterval)
 		size, err := storage.Size(name)
 		if err != nil {
-			return 0, err
+			return err
 		}
 		if size != lastSize {
 			lastSize = size
@@ -1106,10 +1119,10 @@ func waitForSettle(storage OutputStorage, name string, settle time.Duration, dea
 			continue
 		}
 		if size > 0 && time.Since(lastChangeTime) >= settle {
-			return size, nil
+			return nil
 		}
 	}
-	return lastSize, nil
+	return nil
 }
 
 func clampUint16(v int) uint16 {
