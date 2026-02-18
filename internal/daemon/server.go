@@ -32,15 +32,6 @@ func (p *ptyHandle) File() *os.File {
 	return p.f
 }
 
-type Session struct {
-	Name      string       `json:"name"`
-	PID       int          `json:"pid"`
-	Command   string       `json:"command"`
-	State     SessionState `json:"state"`
-	CreatedAt time.Time    `json:"created_at"`
-	StoppedAt *time.Time   `json:"stopped_at,omitempty"`
-}
-
 type SessionInfo struct {
 	Name      string `json:"name"`
 	PID       int    `json:"pid"`
@@ -51,7 +42,13 @@ type SessionInfo struct {
 }
 
 type sessionHandle struct {
-	session       *Session
+	name      string
+	pid       int
+	command   string
+	state     SessionState
+	createdAt time.Time
+	stoppedAt *time.Time
+
 	pty           *ptyHandle
 	cmd           *exec.Cmd
 	done          chan struct{}
@@ -143,14 +140,12 @@ func (s *Server) recoverSessions() error {
 		}
 
 		s.handles[name] = &sessionHandle{
-			session: &Session{
-				Name:      meta.Name,
-				PID:       meta.PID,
-				Command:   meta.Command,
-				State:     meta.State,
-				CreatedAt: meta.CreatedAt,
-				StoppedAt: meta.StoppedAt,
-			},
+			name:      meta.Name,
+			pid:       meta.PID,
+			command:   meta.Command,
+			state:     meta.State,
+			createdAt: meta.CreatedAt,
+			stoppedAt: meta.StoppedAt,
 		}
 	}
 
@@ -211,8 +206,8 @@ func (s *Server) cleanupExpiredSessions() {
 
 	now := time.Now()
 	for name, h := range s.handles {
-		if h.session.State == StateStopped && h.session.StoppedAt != nil {
-			if now.Sub(*h.session.StoppedAt) > s.stoppedTTL {
+		if h.state == StateStopped && h.stoppedAt != nil {
+			if now.Sub(*h.stoppedAt) > s.stoppedTTL {
 				s.storage.Delete(name)
 				delete(s.handles, name)
 			}
@@ -227,7 +222,7 @@ func (s *Server) Shutdown() {
 	close(s.cleanupStopChan)
 
 	for _, h := range s.handles {
-		if h.session.State == StateRunning {
+		if h.state == StateRunning {
 			if h.done != nil {
 				close(h.done)
 			}
@@ -393,16 +388,14 @@ func (s *Server) handleCreate(req Request) Response {
 	}
 
 	h := &sessionHandle{
-		session: &Session{
-			Name:      req.Name,
-			PID:       cmd.Process.Pid,
-			Command:   command,
-			State:     StateRunning,
-			CreatedAt: now,
-		},
-		pty:  &ptyHandle{f: ptmx},
-		cmd:  cmd,
-		done: make(chan struct{}),
+		name:      req.Name,
+		pid:       cmd.Process.Pid,
+		command:   command,
+		state:     StateRunning,
+		createdAt: now,
+		pty:       &ptyHandle{f: ptmx},
+		cmd:       cmd,
+		done:      make(chan struct{}),
 	}
 	if req.TUIMode {
 		h.frameDetector = ansi.NewFrameDetector(ansi.DefaultTUIStrategy())
@@ -414,10 +407,10 @@ func (s *Server) handleCreate(req Request) Response {
 	go s.captureOutput(req.Name, h)
 
 	return Response{Success: true, Data: map[string]interface{}{
-		"name":       h.session.Name,
-		"pid":        h.session.PID,
-		"command":    h.session.Command,
-		"created_at": h.session.CreatedAt,
+		"name":       h.name,
+		"pid":        h.pid,
+		"command":    h.command,
+		"created_at": h.createdAt,
 		"cols":       cols,
 		"rows":       rows,
 	}}
@@ -491,9 +484,9 @@ func (s *Server) captureOutput(name string, h *sessionHandle) {
 	h.frameDetector = nil
 	h.responder = nil
 
-	h.session.State = StateStopped
+	h.state = StateStopped
 	now := time.Now()
-	h.session.StoppedAt = &now
+	h.stoppedAt = &now
 
 	if meta, err := s.storage.LoadMeta(name); err == nil {
 		meta.State = StateStopped
@@ -516,14 +509,14 @@ func (s *Server) handleList() Response {
 	result := make([]SessionInfo, 0, len(s.handles))
 	for _, h := range s.handles {
 		info := SessionInfo{
-			Name:      h.session.Name,
-			PID:       h.session.PID,
-			Command:   h.session.Command,
-			CreatedAt: h.session.CreatedAt.Format(time.RFC3339),
-			State:     string(h.session.State),
+			Name:      h.name,
+			PID:       h.pid,
+			Command:   h.command,
+			CreatedAt: h.createdAt.Format(time.RFC3339),
+			State:     string(h.state),
 		}
-		if h.session.StoppedAt != nil {
-			info.StoppedAt = h.session.StoppedAt.Format(time.RFC3339)
+		if h.stoppedAt != nil {
+			info.StoppedAt = h.stoppedAt.Format(time.RFC3339)
 		}
 		result = append(result, info)
 	}
@@ -542,7 +535,7 @@ func (s *Server) handleRead(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
-	sessState := h.session.State
+	sessState := h.state
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -645,7 +638,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
-	if h.session.State != StateRunning {
+	if h.state != StateRunning {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is not running (snapshot requires a running TUI session)", req.Name)}
 	}
@@ -799,7 +792,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 	return Response{Success: true, Data: map[string]interface{}{
 		"output":   result,
 		"position": totalLen,
-		"state":    h.session.State,
+		"state":    h.state,
 	}}
 }
 
@@ -810,7 +803,7 @@ func (s *Server) handleSend(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
-	if h.session.State != StateRunning {
+	if h.state != StateRunning {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is stopped", req.Name)}
 	}
@@ -842,7 +835,7 @@ func (s *Server) handleStop(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 
-	if h.session.State == StateStopped {
+	if h.state == StateStopped {
 		return Response{Success: true, Data: "already stopped"}
 	}
 
@@ -870,9 +863,9 @@ func (s *Server) handleStop(req Request) Response {
 	h.frameDetector = nil
 	h.responder = nil
 
-	h.session.State = StateStopped
+	h.state = StateStopped
 	now := time.Now()
-	h.session.StoppedAt = &now
+	h.stoppedAt = &now
 
 	if meta, err := s.storage.LoadMeta(req.Name); err == nil {
 		meta.State = StateStopped
@@ -893,7 +886,7 @@ func (s *Server) handleKill(req Request) Response {
 	}
 
 	var proc *os.Process
-	if h.session.State == StateRunning {
+	if h.state == StateRunning {
 		if h.done != nil {
 			close(h.done)
 		}
@@ -1026,11 +1019,11 @@ func (s *Server) handleInfo(req Request) Response {
 	}
 
 	result := map[string]interface{}{
-		"name":           h.session.Name,
-		"state":          string(h.session.State),
-		"pid":            h.session.PID,
-		"command":        h.session.Command,
-		"created_at":     h.session.CreatedAt.Format(time.RFC3339),
+		"name":           h.name,
+		"state":          string(h.state),
+		"pid":            h.pid,
+		"command":        h.command,
+		"created_at":     h.createdAt.Format(time.RFC3339),
 		"bytes_buffered": size,
 		"read_position":  meta.ReadPos,
 		"cols":           meta.Cols,
@@ -1038,12 +1031,12 @@ func (s *Server) handleInfo(req Request) Response {
 		"tui_mode":       meta.TUIMode,
 	}
 
-	if h.session.StoppedAt != nil {
-		result["stopped_at"] = h.session.StoppedAt.Format(time.RFC3339)
+	if h.stoppedAt != nil {
+		result["stopped_at"] = h.stoppedAt.Format(time.RFC3339)
 	}
 
-	if h.session.State == StateRunning {
-		result["uptime_seconds"] = time.Since(h.session.CreatedAt).Seconds()
+	if h.state == StateRunning {
+		result["uptime_seconds"] = time.Since(h.createdAt).Seconds()
 	}
 
 	return Response{Success: true, Data: result}
@@ -1078,7 +1071,7 @@ func (s *Server) handleResize(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 
-	if h.session.State != StateRunning {
+	if h.state != StateRunning {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is stopped", req.Name)}
 	}
