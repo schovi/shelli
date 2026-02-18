@@ -11,10 +11,16 @@ import (
 	"github.com/schovi/shelli/internal/wait"
 )
 
-type Client struct{}
+type Client struct {
+	customSocketPath string
+}
 
 func NewClient() *Client {
 	return &Client{}
+}
+
+func NewClientWithSocketPath(path string) *Client {
+	return &Client{customSocketPath: path}
 }
 
 func (c *Client) EnsureDaemon() error {
@@ -425,7 +431,11 @@ func (c *Client) Exec(name string, opts ExecOptions) (*ExecResult, error) {
 }
 
 func (c *Client) send(req Request) (*Response, error) {
-	conn, err := net.Dial("unix", SocketPath())
+	sockPath := SocketPath()
+	if c.customSocketPath != "" {
+		sockPath = c.customSocketPath
+	}
+	conn, err := net.Dial("unix", sockPath)
 	if err != nil {
 		return nil, err
 	}
