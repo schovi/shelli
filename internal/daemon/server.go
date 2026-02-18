@@ -244,6 +244,7 @@ func (s *Server) Shutdown() {
 }
 
 type Request struct {
+	Version    int      `json:"version,omitempty"`
 	Action     string   `json:"action"`
 	Name       string   `json:"name,omitempty"`
 	Command    string   `json:"command,omitempty"`
@@ -280,6 +281,14 @@ func (s *Server) handleConn(conn net.Conn) {
 	var req Request
 	if err := json.NewDecoder(conn).Decode(&req); err != nil {
 		s.sendResponse(conn, Response{Success: false, Error: err.Error()})
+		return
+	}
+
+	if req.Version != ProtocolVersion && req.Version != 0 {
+		s.sendResponse(conn, Response{
+			Success: false,
+			Error: fmt.Sprintf("protocol version mismatch: client=%d, daemon=%d. Restart daemon with: shelli daemon --stop && shelli daemon", req.Version, ProtocolVersion),
+		})
 		return
 	}
 

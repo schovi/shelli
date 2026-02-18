@@ -3,6 +3,8 @@ package daemon
 import "time"
 
 const (
+	ProtocolVersion = 1
+
 	ReadBufferSize       = 4096
 	KillGracePeriod      = 100 * time.Millisecond
 	ClientDeadline       = 30 * time.Second
