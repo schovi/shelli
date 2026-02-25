@@ -207,6 +207,18 @@ func (s *FileStorage) saveMetaLocked(session string, meta *SessionMeta) error {
 	return nil
 }
 
+func (s *FileStorage) UpdateMeta(session string, fn func(meta *SessionMeta)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	meta, err := s.loadMetaLocked(session)
+	if err != nil {
+		return err
+	}
+	fn(meta)
+	return s.saveMetaLocked(session, meta)
+}
+
 func (s *FileStorage) ListSessions() ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

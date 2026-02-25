@@ -162,6 +162,18 @@ func (s *MemoryStorage) SaveMeta(session string, meta *SessionMeta) error {
 	return nil
 }
 
+func (s *MemoryStorage) UpdateMeta(session string, fn func(meta *SessionMeta)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	meta, exists := s.metas[session]
+	if !exists {
+		return fmt.Errorf("session %q not found", session)
+	}
+	fn(meta)
+	return nil
+}
+
 func (s *MemoryStorage) ListSessions() ([]string, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

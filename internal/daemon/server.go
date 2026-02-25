@@ -499,11 +499,10 @@ func (s *Server) captureOutput(name string, h *sessionHandle) {
 		now := time.Now()
 		h.stoppedAt = &now
 
-		if meta, err := s.storage.LoadMeta(name); err == nil {
+		s.storage.UpdateMeta(name, func(meta *SessionMeta) {
 			meta.State = StateStopped
 			meta.StoppedAt = &now
-			s.storage.SaveMeta(name, meta)
-		}
+		})
 	}()
 
 	buf := make([]byte, ReadBufferSize)
@@ -622,15 +621,16 @@ func (s *Server) handleRead(req Request) Response {
 			result = string(output)
 		}
 
-		if req.Cursor != "" {
-			if meta.Cursors == nil {
-				meta.Cursors = make(map[string]int64)
+		storage.UpdateMeta(req.Name, func(m *SessionMeta) {
+			if req.Cursor != "" {
+				if m.Cursors == nil {
+					m.Cursors = make(map[string]int64)
+				}
+				m.Cursors[req.Cursor] = totalLen
+			} else {
+				m.ReadPos = totalLen
 			}
-			meta.Cursors[req.Cursor] = totalLen
-		} else {
-			meta.ReadPos = totalLen
-		}
-		storage.SaveMeta(req.Name, meta)
+		})
 	default:
 		output, err := storage.ReadAll(req.Name)
 		if err != nil {
@@ -682,15 +682,16 @@ func (s *Server) handleReadTUI(req Request, h *sessionHandle, screen *vterm.Scre
 			result = screen.Render()
 		}
 
-		if req.Cursor != "" {
-			if meta.Cursors == nil {
-				meta.Cursors = make(map[string]int64)
+		s.storage.UpdateMeta(req.Name, func(m *SessionMeta) {
+			if req.Cursor != "" {
+				if m.Cursors == nil {
+					m.Cursors = make(map[string]int64)
+				}
+				m.Cursors[req.Cursor] = currentVersion
+			} else {
+				m.ReadPos = currentVersion
 			}
-			meta.Cursors[req.Cursor] = currentVersion
-		} else {
-			meta.ReadPos = currentVersion
-		}
-		s.storage.SaveMeta(req.Name, meta)
+		})
 	default:
 		result = screen.Render()
 	}
@@ -924,11 +925,10 @@ func (s *Server) handleStop(req Request) Response {
 	now := time.Now()
 	h.stoppedAt = &now
 
-	if meta, err := s.storage.LoadMeta(req.Name); err == nil {
+	s.storage.UpdateMeta(req.Name, func(meta *SessionMeta) {
 		meta.State = StateStopped
 		meta.StoppedAt = &now
-		s.storage.SaveMeta(req.Name, meta)
-	}
+	})
 
 	return Response{Success: true}
 }
@@ -1188,9 +1188,10 @@ func (s *Server) handleResize(req Request) Response {
 	}
 	s.mu.Unlock()
 
-	meta.Cols = cols
-	meta.Rows = rows
-	if err := storage.SaveMeta(req.Name, meta); err != nil {
+	if err := storage.UpdateMeta(req.Name, func(m *SessionMeta) {
+		m.Cols = cols
+		m.Rows = rows
+	}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("save meta: %v", err)}
 	}
 
