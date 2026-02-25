@@ -36,5 +36,6 @@ type OutputStorage interface {
 
 	LoadMeta(session string) (*SessionMeta, error)
 	SaveMeta(session string, meta *SessionMeta) error
+	UpdateMeta(session string, fn func(meta *SessionMeta)) error
 	ListSessions() ([]string, error)
 }
