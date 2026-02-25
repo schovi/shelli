@@ -18,8 +18,6 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="License"></a>
 </p>
 
-> **Note:** This project is in active development. The API may change until v1.0.0.
-
 ## Installation
 
 ### Homebrew (macOS/Linux)
