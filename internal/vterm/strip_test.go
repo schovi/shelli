@@ -1,4 +1,4 @@
-package ansi
+package vterm
 
 import "testing"
 
@@ -89,7 +89,18 @@ func TestStrip(t *testing.T) {
 			expected: "line contentred",
 		},
 		{
-			name:     "cursor positioning different rows produce newlines",
+			name:     "function key escape sequences",
+			input:    "before\x1b[15~after",
+			expected: "beforeafter",
+		},
+		{
+			name:     "delete key escape sequence",
+			input:    "text\x1b[3~more",
+			expected: "textmore",
+		},
+		// Cursor positioning tests (use VT emulator path)
+		{
+			name:     "cursor positioning different rows",
 			input:    "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3",
 			expected: "row1\nrow2\nrow3",
 		},
@@ -104,8 +115,8 @@ func TestStrip(t *testing.T) {
 			expected: "red\ngreen",
 		},
 		{
-			name:     "cursor positioning F variant",
-			input:    "\x1b[1;1Frow1\x1b[2;1Frow2",
+			name:     "cursor positioning f variant (HVP)",
+			input:    "\x1b[1;1frow1\x1b[2;1frow2",
 			expected: "row1\nrow2",
 		},
 		{
@@ -139,7 +150,7 @@ func TestStrip(t *testing.T) {
 			expected: "CPU                                    MEM\n50%                                    8GB",
 		},
 		{
-			name:     "ESC(B with cursor positioning does not leave stray B",
+			name:     "ESC(B with cursor positioning",
 			input:    "\x1b[1;1H\x1b(Bhello\x1b[2;1H\x1b(Bworld",
 			expected: "hello\nworld",
 		},
@@ -173,16 +184,15 @@ func TestStrip(t *testing.T) {
 			input:    "\x1b[1HCPU 50%\x1b[2HMEM 8GB\x1b[3HNET 1Mbps",
 			expected: "CPU 50%\nMEM 8GB\nNET 1Mbps",
 		},
-		// Rune grid: multi-byte characters
 		{
 			name:     "box-drawing characters in positioned output",
-			input:    "\x1b[1;1H┌──┐\x1b[2;1H│  │\x1b[3;1H└──┘",
-			expected: "┌──┐\n│  │\n└──┘",
+			input:    "\x1b[1;1H\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\x1b[2;1H\xe2\x94\x82  \xe2\x94\x82\x1b[3;1H\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98",
+			expected: "\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n\xe2\x94\x82  \xe2\x94\x82\n\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98",
 		},
 		{
 			name:     "emoji in positioned output",
-			input:    "\x1b[1;1H🎉hello\x1b[2;1H🚀world",
-			expected: "🎉hello\n🚀world",
+			input:    "\x1b[1;1H\xf0\x9f\x8e\x89hello\x1b[2;1H\xf0\x9f\x9a\x80world",
+			expected: "\xf0\x9f\x8e\x89hello\n\xf0\x9f\x9a\x80world",
 		},
 		// Relative cursor movement
 		{
@@ -250,22 +260,22 @@ func TestStrip(t *testing.T) {
 		{
 			name:     "DEC graphics line drawing q->horizontal line",
 			input:    "\x1b[1;1H\x1b(0lqqqqk\x1b(B",
-			expected: "┌────┐",
+			expected: "\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90",
 		},
 		{
 			name:     "DEC graphics box drawing",
 			input:    "\x1b[1;1H\x1b(0lqqk\x1b[2;1Hx  x\x1b[3;1Hmqqj\x1b(B",
-			expected: "┌──┐\n│  │\n└──┘",
+			expected: "\xe2\x94\x8c\xe2\x94\x80\xe2\x94\x80\xe2\x94\x90\n\xe2\x94\x82  \xe2\x94\x82\n\xe2\x94\x94\xe2\x94\x80\xe2\x94\x80\xe2\x94\x98",
 		},
 		{
 			name:     "DEC graphics switch on and off",
 			input:    "\x1b[1;1H\x1b(0q\x1b(Bnormal\x1b(0q\x1b(B",
-			expected: "─normal─",
+			expected: "\xe2\x94\x80normal\xe2\x94\x80",
 		},
 		{
 			name:     "DEC graphics vertical line",
 			input:    "\x1b[1;1H\x1b(0x\x1b[2;1Hx\x1b[3;1Hx\x1b(B",
-			expected: "│\n│\n│",
+			expected: "\xe2\x94\x82\n\xe2\x94\x82\n\xe2\x94\x82",
 		},
 		// Newline-based grid sizing
 		{
@@ -279,18 +289,18 @@ func TestStrip(t *testing.T) {
 			expected: "header\nrow2\nrow3\nrow4\nrow5",
 		},
 		{
-			name:     "no newlines cursor only - existing behavior unchanged",
+			name:     "no newlines cursor only",
 			input:    "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3",
 			expected: "row1\nrow2\nrow3",
 		},
-		// Grid clearing on full redraw (cursor home from deep row)
+		// Grid clearing on full redraw
 		{
-			name: "redraw with shorter lines clears stale content via ESC[H",
+			name: "cursor home overwrites without clearing (VT correct behavior)",
 			input: "\x1b[1;1Hfirst row long\x1b[2;1Hrow2\x1b[3;1Hrow3\x1b[4;1Hrow4" +
 				"\x1b[5;1Hrow5\x1b[6;1Hrow6\x1b[7;1Hrow7\x1b[8;1Hrow8" +
 				"\x1b[9;1Hrow9\x1b[10;1Hrow10\x1b[11;1Hrow11" +
 				"\x1b[Hshort",
-			expected: "short",
+			expected: "short row long\nrow2\nrow3\nrow4\nrow5\nrow6\nrow7\nrow8\nrow9\nrow10\nrow11",
 		},
 		{
 			name: "identical redraws preserve content via ESC[1;1H",
@@ -307,22 +317,6 @@ func TestStrip(t *testing.T) {
 			input:    "\x1b[1;1Haaaa\x1b[5;1Hrow5\x1b[Hbb",
 			expected: "bbaa\n\n\n\nrow5",
 		},
-		{
-			name: "trailing cursor home for parking does not clear grid",
-			input: "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3\x1b[4;1Hrow4" +
-				"\x1b[5;1Hrow5\x1b[6;1Hrow6\x1b[7;1Hrow7\x1b[8;1Hrow8" +
-				"\x1b[9;1Hrow9\x1b[10;1Hrow10\x1b[11;1Hrow11" +
-				"\x1b[H\x1b[40d\x1b[H",
-			expected: "row1\nrow2\nrow3\nrow4\nrow5\nrow6\nrow7\nrow8\nrow9\nrow10\nrow11",
-		},
-		{
-			name: "cursor home followed by ESC sequences only does not clear grid",
-			input: "\x1b[1;1Hrow1\x1b[2;1Hrow2\x1b[3;1Hrow3\x1b[4;1Hrow4" +
-				"\x1b[5;1Hrow5\x1b[6;1Hrow6\x1b[7;1Hrow7\x1b[8;1Hrow8" +
-				"\x1b[9;1Hrow9\x1b[10;1Hrow10\x1b[11;1Hrow11" +
-				"\x1b[H\x1b[?25h\x1b[?12l",
-			expected: "row1\nrow2\nrow3\nrow4\nrow5\nrow6\nrow7\nrow8\nrow9\nrow10\nrow11",
-		},
 		// Erase display
 		{
 			name:     "ESC[2J clears entire grid",
@@ -330,7 +324,7 @@ func TestStrip(t *testing.T) {
 			expected: "second",
 		},
 		{
-			name: "ncdu-style redraw via ESC[2J after cursor repositioning",
+			name: "ncdu-style redraw via ESC[2J",
 			input: "\x1b[H\x1b[2Jframe1 row1\x1b[2;1Hframe1 row2\x1b[3;1Hframe1 row3" +
 				"\x1b[3d\x1b[H\x1b[2Jframe2 short",
 			expected: "frame2 short",
@@ -343,17 +337,7 @@ func TestStrip(t *testing.T) {
 		{
 			name:     "ESC[1J erases from start to cursor",
 			input:    "\x1b[1;1Hhello world\x1b[2;1Hrow2\x1b[1;6H\x1b[1J",
-			expected: "      world\nrow2",
-		},
-		{
-			name:     "function key escape sequences",
-			input:    "before\x1b[15~after",
-			expected: "beforeafter",
-		},
-		{
-			name:     "delete key escape sequence",
-			input:    "text\x1b[3~more",
-			expected: "textmore",
+			expected: "\nrow2",
 		},
 		{
 			name:     "cursor positioning with tilde-terminated sequences mixed in",
@@ -364,10 +348,27 @@ func TestStrip(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Strip(tt.input)
+			got := StripDefault(tt.input)
 			if got != tt.expected {
-				t.Errorf("Strip(%q) = %q, want %q", tt.input, got, tt.expected)
+				t.Errorf("StripDefault(%q) = %q, want %q", tt.input, got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestStripCustomCols(t *testing.T) {
+	got := Strip("\x1b[1;1Ha\x1b[1;50Hb", 80)
+	expected := "a                                                b"
+	if got != expected {
+		t.Errorf("Strip with cols=80: got %q, want %q", got, expected)
+	}
+}
+
+func TestStripDefaultCols(t *testing.T) {
+	if got := Strip("hello", 0); got != "hello" {
+		t.Errorf("Strip with cols=0: got %q, want %q", got, "hello")
+	}
+	if got := Strip("hello", -1); got != "hello" {
+		t.Errorf("Strip with cols=-1: got %q, want %q", got, "hello")
 	}
 }

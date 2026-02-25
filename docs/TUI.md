@@ -1,76 +1,63 @@
 # TUI Mode
 
-TUI mode enables shelli to work with full-screen terminal applications (htop, vim, lazygit, etc.) by detecting frame boundaries and managing buffer truncation.
+TUI mode enables shelli to work with full-screen terminal applications (htop, vim, lazygit, etc.) using a proper VT terminal emulator.
 
 ## Overview
 
 Without TUI mode, shelli's output buffer grows indefinitely as TUI apps repaint the screen. Each repaint appends new escape sequences and content, making the buffer unreadable and eventually hitting memory limits.
 
-TUI mode solves this by:
-1. Detecting when a new frame starts (via frame detection strategies)
-2. Truncating the buffer at frame boundaries, keeping only the latest frame
-3. Providing snapshot reads that force a clean redraw
+TUI mode solves this by replacing raw byte storage with a VT terminal emulator (`charmbracelet/x/vt`). The emulator IS the screen state, so reads always return the current screen content regardless of how many repaints have occurred.
 
 Enable with `--tui` on session creation:
 ```bash
 shelli create myapp --cmd htop --tui
 ```
 
-## Frame Detection
+## Architecture
 
-The `FrameDetector` (`internal/ansi/clear.go`) processes PTY output chunks and identifies frame boundaries using five strategies, checked in priority order.
+### How it works
 
-### Strategy 1: Screen Clear (`screen_clear`)
+Each TUI session gets a `vterm.Screen` wrapper around a thread-safe VT emulator:
 
-**Trigger**: `ESC[2J` (clear screen), `ESC[?1049h` (alt buffer), `ESC c` (terminal reset)
+```
+PTY output → screen.Write() (feeds VT emulator)
+             screen.Render() → ANSI-styled screen content (for reads)
+             screen.String() → plain text screen content (for snapshots/strip)
+             screen.ReadResponses(ptmx) → bridges terminal query responses to PTY
+```
 
-**Behavior**: Unconditional truncation. Everything before the sequence is discarded.
+No raw byte storage is used for TUI sessions. The emulator handles:
+- Cursor positioning (absolute, relative, home)
+- Screen clearing (ESC[2J, ESC[J, etc.)
+- Line erasing (ESC[K, etc.)
+- Alt screen buffer (ESC[?1049h/l)
+- Synchronized updates (ESC[?2026h/l)
+- DEC Special Graphics charset
+- Color and text attributes (SGR)
+- Terminal capability queries (DA1, DA2, DSR, etc.)
 
-**Apps**: vim (alt buffer), less (alt buffer), most TUI apps at startup
+### Version counter
 
-### Strategy 2: Sync Mode (`sync_mode`)
+An atomic version counter increments on every `Write()`. This replaces byte-count-based change detection:
+- `handleSize` returns the version counter for TUI sessions
+- `handleRead` with `ReadModeNew` compares version against stored read position
+- Wait/settle loops poll the version counter
 
-**Trigger**: `ESC[?2026h` (synchronized update begin)
+### Non-TUI sessions
 
-**Behavior**: Truncation on frame START. Content between sync begin and sync end forms one frame. Suppressed during snapshot mode to allow partial redraws to accumulate.
+Non-TUI sessions are unchanged: raw byte storage with the existing OutputStorage interface.
 
-**Apps**: lazygit, Claude Code, modern terminals
+## Terminal Query Responses
 
-### Strategy 3: Cursor Home (`cursor_home`)
+The VT emulator handles terminal capability queries internally. When an app sends a query (e.g., DA1 `ESC[c`), the emulator generates a response and writes it to an internal pipe. A `ReadResponses` goroutine reads from this pipe and writes to the PTY master, appearing as terminal input to the subprocess.
 
-**Trigger**: `ESC[1;1H` or `ESC[H` (cursor to position 1,1)
+Handled queries include:
+- DA1 (Primary Device Attributes): `ESC[c` / `ESC[0c`
+- DA2 (Secondary Device Attributes): `ESC[>c` / `ESC[>0c`
+- DSR (Device Status Report): `ESC[5n`, `ESC[6n`
+- Cursor Position Report
 
-**Behavior**: Only fires when preceded by a heuristic marker within 20 bytes:
-- `ESC[0m` or `ESC[m` (attribute reset)
-- `ESC[?25l` (hide cursor)
-
-Additionally uses look-ahead to distinguish real frame boundaries from cursor repositioning (e.g., vim/micro editing cursor returning to row 1):
-- If printable content follows within 50 bytes: truncate (real frame)
-- If only cursor control sequences follow (`ESC[?25h`, `ESC[?12l`, etc.): skip
-- If at end of chunk (ambiguous): defer decision to next chunk
-
-A within-chunk cooldown of 4096 bytes prevents double-firing when apps send multiple cursor_home sequences within a single render pass.
-
-**Apps**: k9s, htop, nnn
-
-### Strategy 4: Cursor Jump to Top (`CursorJumpTop`)
-
-**Trigger**: `ESC[row;colH` where `row <= 2` and `maxRowSeen >= 10`
-
-**Behavior**: Detects when cursor jumps from a high row back to the top of the screen, indicating a full screen redraw. Uses look-ahead to distinguish real frame boundaries from cursor repositioning:
-- If printable content follows (possibly after color/mode sequences): truncate
-- If only cursor control sequences follow (`ESC[?25h`, `ESC[?12l`, etc.): skip
-- If at end of chunk (ambiguous): defer decision to next chunk
-
-**Apps**: htop, glances, apps that draw rows sequentially
-
-### Strategy 5: Size Cap (`MaxSize`)
-
-**Trigger**: Buffer exceeds `MaxSize` (default 100KB)
-
-**Behavior**: Only fires if a frame boundary was detected recently (within `MaxSize * 2` bytes). This prevents breaking hybrid apps (like btm) that send one frame at startup then switch to incremental updates.
-
-**Apps**: Safety net for any app with recent frame detection
+This replaces the old hand-rolled `TerminalResponder` with the emulator's built-in handlers.
 
 ## Snapshot Mechanism
 
@@ -78,122 +65,55 @@ Snapshot (`--snapshot` on read) provides a clean, current frame by forcing a ful
 
 ### Flow
 
-1. **Cold start wait**: If storage is empty, wait up to 2s for initial content (handles slow-starting apps)
-2. **Clear storage** and reset frame detector
-3. **Enable snapshot mode** (suppresses ALL truncation strategies)
-4. **Resize cycle**: Set terminal to (cols+1, rows+1), send SIGWINCH, pause 200ms, restore original size, send SIGWINCH
-5. **Settle loop**: Poll storage every 25ms until content stops changing for `settle_ms` (default 300ms)
-6. **Retry**: If output is still empty, send another SIGWINCH with 2x settle time
-7. **Disable snapshot mode** and return output
+1. **Cold start wait**: If `screen.Version() == 0`, wait up to 2s for initial content
+2. **Resize cycle**: Set terminal to (cols+1, rows+1) and resize emulator to match, send SIGWINCH, pause 200ms, restore original size, send SIGWINCH
+3. **Settle loop**: Poll `screen.Version()` every 25ms until stable for `settle_ms` (default 300ms)
+4. **Retry**: If output is still empty, send another SIGWINCH with 2x settle time
+5. Return `screen.String()` (plain text)
 
 ### Why resize?
 
-TUI apps listen for SIGWINCH (window size change) and perform a full redraw. By temporarily changing the size and changing it back, we trigger two redraws. The frame detector captures the clean output from the final redraw.
+TUI apps listen for SIGWINCH (window size change) and perform a full redraw. The emulator is also resized to match, so it correctly interprets the redrawn content at the right dimensions.
 
-## Virtual Screen Buffer
+## ANSI Stripping
 
-The virtual screen buffer (`internal/ansi/strip.go`) converts cursor-positioned terminal output into readable linear text. Used when `--strip-ansi` is applied to read output.
+The `vterm.Strip()` function (`internal/vterm/strip.go`) removes ANSI escape sequences from text.
 
-### How it works
+### Two paths
 
-1. Pre-scan all cursor positioning sequences to determine grid dimensions
-2. Allocate a rune-based grid (supports multi-byte UTF-8: box-drawing, emoji, CJK)
-3. Process the string, executing cursor movements and writing characters to grid cells
-4. Output: join grid rows, right-trim trailing spaces, remove trailing empty rows
+1. **Fast path (no cursor sequences)**: Regex-based stripping of CSI, OSC, charset, keypad, DEC private mode, and ESC+letter sequences.
 
-### Grid clearing on redraw
+2. **Emulator path (has cursor sequences)**: Creates a temporary VT emulator, writes the content, reads back `String()` (plain text). Handles all cursor positioning, erasing, and character rendering correctly.
 
-During snapshot reads, the resize cycle (SIGWINCH) triggers two full redraws that accumulate in the buffer. The second redraw moves the cursor back to (0,0) and rewrites the screen. If lines in the second redraw are shorter than the first, stale characters remain because the grid isn't cleared between redraws.
+Detection: checks for cursor positioning patterns (`ESC[n;nH`, `ESC[nG`, `ESC[nd`, `ESC[nA/B/C/D`).
 
-Two mechanisms handle this:
-
-1. **ESC[2J (erase display)**: Apps like ncdu send explicit screen clear sequences. The virtual buffer now executes these, clearing the grid unconditionally.
-
-2. **Cursor home with look-ahead**: When cursor positioning moves to (0,0) from row 10+ (0-based), the buffer checks if printable content follows within 100 bytes. If yes (real redraw), the grid is cleared. If only escape sequences or end-of-string follow (cursor parking), the grid is preserved. This prevents apps like newsboat from having their output wiped by trailing cursor-home sequences used for cursor positioning after rendering.
-
-### Supported sequences
-
-| Sequence | Name | Behavior |
-|----------|------|----------|
-| `ESC[row;colH` / `ESC[row;colF` | Cursor Position | Move to absolute row, col |
-| `ESC[nH` / `ESC[H` | Cursor Row / Home | Move to row n (or 1,1) |
-| `ESC[nG` | Cursor Column Absolute | Move to column n, keep row |
-| `ESC[nd` | Cursor Row Absolute | Move to row n, keep column |
-| `ESC[nA` | Cursor Up | Move up n rows |
-| `ESC[nB` | Cursor Down | Move down n rows |
-| `ESC[nC` | Cursor Right | Move right n columns |
-| `ESC[nD` | Cursor Left | Move left n columns |
-| `ESC[K` / `ESC[0K` | Erase to End | Clear from cursor to end of line |
-| `ESC[1K` | Erase to Start | Clear from start of line to cursor |
-| `ESC[2K` | Erase Full Line | Clear entire line |
-| `ESC[J` / `ESC[0J` | Erase to End of Display | Clear from cursor to end of display |
-| `ESC[1J` | Erase to Start of Display | Clear from start of display to cursor |
-| `ESC[2J` | Erase Full Display | Clear entire display |
-| `ESC(0` | DEC Graphics On | Activate DEC Special Graphics charset |
-| `ESC(B` | DEC Graphics Off | Deactivate, return to ASCII |
-
-### DEC Special Graphics
-
-When `ESC(0` is active, ASCII characters are mapped to box-drawing glyphs:
-
-| Input | Output | Description |
-|-------|--------|-------------|
-| `q` | `─` | Horizontal line |
-| `x` | `│` | Vertical line |
-| `l` | `┌` | Top-left corner |
-| `k` | `┐` | Top-right corner |
-| `m` | `└` | Bottom-left corner |
-| `j` | `┘` | Bottom-right corner |
-| `n` | `┼` | Cross |
-| `t` | `├` | Left tee |
-| `u` | `┤` | Right tee |
-| `v` | `┴` | Bottom tee |
-| `w` | `┬` | Top tee |
-
-## Terminal Responder
-
-The `TerminalResponder` (`internal/ansi/responder.go`) intercepts terminal capability queries in PTY output and writes responses back to the PTY input. This unblocks apps that wait for query responses before rendering.
-
-### Intercepted queries
-
-| Query | Sequence | Response |
-|-------|----------|----------|
-| DA1 (Primary Device Attributes) | `ESC[c` / `ESC[0c` | `ESC[?62;22c` (VT220 with ANSI color) |
-| DA2 (Secondary Device Attributes) | `ESC[>c` / `ESC[>0c` | `ESC[>1;1;0c` (VT220, version 1) |
-| Kitty Keyboard Query | `ESC[?u` | `ESC[?0u` (not supported) |
-| DECRPM (Mode Report) | `ESC[?{n}$p` | `ESC[?{n};0$y` (not recognized) |
+Standalone `\n` (not preceded by `\r`) is converted to `\r\n` before feeding to the emulator, matching what a real terminal driver does with ONLCR.
 
 ## App Compatibility
 
-| App | Frame Detection | Snapshot | Strip-ANSI | Score | Notes |
-|-----|----------------|----------|------------|-------|-------|
-| btop | cursor_home | Clean | Good | 9/9 | HVP cursor (CSI f) support |
-| htop | screen_clear | Clean | Good | 9/9 | Reference-quality TUI support |
-| glances | CursorJumpTop | Clean | Good | 9/9 | Needs --settle 3000 for consistency |
-| k9s | cursor_home | Clean | Partial | 9/9 | Left columns truncated in strip-ansi |
-| ranger | CursorJumpTop | Clean | Good | 9/9* | Fixed by snapshot truncation suppression |
-| nnn | cursor_home | Clean | Good | 9/9 | |
-| yazi | screen_clear | Clean | Partial | 9/9 | Only right pane in strip-ansi |
-| vifm | cursor_home | Clean | Good | 9/9 | |
-| lazygit | sync_mode | Clean | Good | 9/9 | |
-| tig | screen_clear | Clean | Good | 9/9 | |
-| vim | screen_clear + cursor_home | Clean | Good | 9/9 | Fixed by cursor_home look-ahead + snapshot suppression |
-| less | screen_clear | Clean | Good | 9/9* | Fixed by newline grid sizing |
-| micro | CursorJumpTop + cursor_home | Clean | Good | 9/9 | Fixed by cursor_home look-ahead + snapshot suppression |
-| weechat | cursor_home | Clean | Good | 9/9 | Timing-dependent at large sizes |
-| irssi | screen_clear | Clean | Good | 9/9 | |
-| newsboat | screen_clear | Clean | Good | 9/9 | Fixed by grid clearing on redraw |
-| mc | cursor_home | Clean | Good | 9/9 | Heavy box drawing renders well |
-| bat | screen_clear | Clean | Good | 9/9* | Fixed by newline grid sizing |
-| ncdu | screen_clear | Clean | Good | 9/9 | Fixed by erase display support |
-
-*= fixed by snapshot truncation suppression, newline grid sizing, or grid clearing on redraw
+| App | Snapshot | Strip-ANSI | Notes |
+|-----|----------|------------|-------|
+| btop | Clean | Good | HVP cursor (CSI f) support |
+| htop | Clean | Good | Reference-quality TUI support |
+| glances | Clean | Good | Needs --settle 3000 for consistency |
+| k9s | Clean | Partial | Left columns truncated in strip-ansi |
+| ranger | Clean | Good | |
+| nnn | Clean | Good | |
+| yazi | Clean | Partial | Only right pane in strip-ansi |
+| vifm | Clean | Good | |
+| lazygit | Clean | Good | |
+| tig | Clean | Good | |
+| vim | Clean | Good | |
+| less | Clean | Good | |
+| micro | Clean | Good | |
+| weechat | Clean | Good | Timing-dependent at large sizes |
+| irssi | Clean | Good | |
+| newsboat | Clean | Good | |
+| mc | Clean | Good | Heavy box drawing renders well |
+| bat | Clean | Good | |
+| ncdu | Clean | Good | |
 
 ## Known Limitations
-
-### Scroll Regions (DECSTBM)
-
-`ESC[top;bottomr` sets a scroll region. The virtual screen buffer does not track scroll regions, so apps that use scrolling within a region (e.g., some panels in mc) may have degraded strip-ansi output.
 
 ### Direct /dev/tty Access
 
@@ -201,7 +121,7 @@ Some apps open `/dev/tty` directly instead of using stdin/stdout. These bypass t
 
 ### Wide Characters
 
-CJK characters and some emoji occupy two terminal cells but one grid position. The virtual screen buffer currently treats each character as one cell, which may cause alignment issues with double-width characters.
+CJK characters and some emoji occupy two terminal cells. The VT emulator handles display width correctly via the `displaywidth` package, but some edge cases with complex grapheme clusters may still cause alignment issues.
 
 ### Partial Strip-ANSI for Complex Layouts
 
@@ -213,14 +133,6 @@ Some apps with complex multi-pane layouts produce partial strip-ansi output:
 
 | Constant | Value | Location | Purpose |
 |----------|-------|----------|---------|
-| `maxSequenceLen` | 12 | `clear.go` | Max escape sequence length for cross-chunk buffering |
-| `cursorHomeLookback` | 20 bytes | `clear.go` | Lookback window for cursor_home heuristic markers |
-| `cursorJumpTopThreshold` | 10 rows | `clear.go` | Minimum maxRowSeen before jump-to-top triggers |
-| `jumpLookAheadLen` | 50 bytes | `clear.go` | Bytes to scan forward after cursor jump |
-| `cursorHomeCooldownBytes` | 4096 bytes | `clear.go` | Within-chunk cooldown after cursor_home fires |
-| `MaxSize` (default) | 100KB | `clear.go` | Size cap fallback threshold |
-| `maxGridCols` | 500 | `strip.go` | Maximum virtual screen buffer columns |
-| `maxGridRows` | 500 | `strip.go` | Maximum virtual screen buffer rows |
 | `DefaultSnapshotSettleMs` | 300ms | `constants.go` | Default settle time for snapshot |
 | `SnapshotPollInterval` | 25ms | `constants.go` | Polling interval during snapshot settle |
 | `SnapshotResizePause` | 200ms | `constants.go` | Pause between resize steps |

@@ -262,6 +262,7 @@ type InfoResponse struct {
 	ReadPosition  int64            `json:"read_position"`
 	Cols          int              `json:"cols"`
 	Rows          int              `json:"rows"`
+	TUIMode       bool             `json:"tui_mode,omitempty"`
 	Uptime        float64          `json:"uptime_seconds,omitempty"`
 	Cursors       map[string]int64 `json:"cursors,omitempty"`
 }

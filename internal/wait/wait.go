@@ -18,6 +18,7 @@ type Config struct {
 	StartPosition int
 	PollInterval  time.Duration
 	SizeFunc      SizeFunc
+	FullOutput    bool // When true, treat output as full content (TUI mode)
 }
 
 func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
@@ -67,11 +68,15 @@ func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
 
 		newOutput := ""
 		if pos > cfg.StartPosition {
-			startIdx := cfg.StartPosition
-			if startIdx > len(output) {
-				startIdx = len(output)
+			if cfg.FullOutput {
+				newOutput = output
+			} else {
+				startIdx := cfg.StartPosition
+				if startIdx > len(output) {
+					startIdx = len(output)
+				}
+				newOutput = output[startIdx:]
 			}
-			newOutput = output[startIdx:]
 		}
 
 		if re != nil && re.MatchString(newOutput) {
@@ -91,11 +96,15 @@ func ForOutput(readFn ReadFunc, cfg Config) (string, int, error) {
 	}
 	newOutput := ""
 	if pos > cfg.StartPosition {
-		startIdx := cfg.StartPosition
-		if startIdx > len(output) {
-			startIdx = len(output)
+		if cfg.FullOutput {
+			newOutput = output
+		} else {
+			startIdx := cfg.StartPosition
+			if startIdx > len(output) {
+				startIdx = len(output)
+			}
+			newOutput = output[startIdx:]
 		}
-		newOutput = output[startIdx:]
 	}
 
 	if re != nil {
