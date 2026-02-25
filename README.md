@@ -358,10 +358,10 @@ Sessions have explicit states with clear transitions:
 
 ## Storage
 
-By default, shelli stores session output in files at `~/.shelli/data/`:
+By default, shelli stores session output in files at `/tmp/shelli-{uid}/data/`:
 
 ```
-~/.shelli/data/
+/tmp/shelli-{uid}/data/
 ├── mysession.out    # raw PTY output (0600 permissions)
 └── mysession.meta   # JSON metadata (state, pid, timestamps)
 ```
@@ -379,7 +379,7 @@ shelli daemon [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--data-dir` | `~/.shelli/data` | Directory for session files |
+| `--data-dir` | `/tmp/shelli-{uid}/data` | Directory for session files |
 | `--memory-backend` | `false` | Use in-memory storage (no persistence) |
 | `--stopped-ttl` | (disabled) | Auto-delete stopped sessions after duration |
 | `--max-output` | `10MB` | Buffer size limit (memory backend only) |
@@ -387,7 +387,7 @@ shelli daemon [flags]
 Examples:
 ```bash
 # Use custom storage location
-shelli daemon --data-dir ~/.shelli/sessions
+shelli daemon --data-dir /tmp/shelli-sessions
 
 # Memory-only mode (v0.3 behavior)
 shelli daemon --memory-backend --max-output 50MB
@@ -454,7 +454,7 @@ shelli uses a daemon process to maintain PTY handles across CLI invocations:
 │                                                                      │
 │  ┌────────────────────┐      ┌────────────────────────────────┐    │
 │  │ MCP Server         │      │ Socket Server                  │    │
-│  │ (--mcp flag)       │      │ (~/.shelli/shelli.sock)        │    │
+│  │ (--mcp flag)       │      │ (/tmp/shelli-{uid}/shelli.sock)│    │
 │  └─────────┬──────────┘      └─────────────┬──────────────────┘    │
 │            └───────────┬───────────────────┘                        │
 │                        ▼                                            │

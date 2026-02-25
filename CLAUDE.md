@@ -32,7 +32,7 @@ shelli provides persistent interactive shell sessions via PTY-backed processes m
 - `storage_memory.go`: In-memory storage with circular buffer (default, 10MB limit)
 - `storage_file.go`: File-based persistent storage
 - `constants.go`: Shared constants (buffer sizes, timeouts)
-- Socket at `~/.shelli/shelli.sock`, auto-started on first command
+- Socket at `/tmp/shelli-{uid}/shelli.sock`, auto-started on first command
 
 **MCP Server** (`internal/mcp/`)
 - `server.go`: JSON-RPC stdio server implementing MCP protocol
