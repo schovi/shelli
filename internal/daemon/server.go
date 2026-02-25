@@ -99,20 +99,22 @@ func WithMaxOutputSize(size int) ServerOption {
 	}
 }
 
+func RuntimeDir() (string, error) {
+	return filepath.Join(os.TempDir(), fmt.Sprintf("shelli-%d", os.Getuid())), nil
+}
+
 func NewServer(opts ...ServerOption) (*Server, error) {
-	homeDir, err := os.UserHomeDir()
+	runtimeDir, err := RuntimeDir()
 	if err != nil {
 		return nil, err
 	}
-
-	socketDir := filepath.Join(homeDir, ".shelli")
-	if err := os.MkdirAll(socketDir, 0700); err != nil {
+	if err := os.MkdirAll(runtimeDir, 0700); err != nil {
 		return nil, err
 	}
 
 	s := &Server{
 		handles:         make(map[string]*sessionHandle),
-		socketDir:       socketDir,
+		socketDir:       runtimeDir,
 		storage:         NewMemoryStorage(DefaultMaxOutputSize),
 		cleanupStopChan: make(chan struct{}),
 	}
@@ -161,11 +163,11 @@ func (s *Server) recoverSessions() error {
 }
 
 func SocketPath() (string, error) {
-	homeDir, err := os.UserHomeDir()
+	runtimeDir, err := RuntimeDir()
 	if err != nil {
-		return "", fmt.Errorf("get home dir: %w", err)
+		return "", err
 	}
-	return filepath.Join(homeDir, ".shelli", "shelli.sock"), nil
+	return filepath.Join(runtimeDir, "shelli.sock"), nil
 }
 
 func (s *Server) socketPath() string {

@@ -39,7 +39,7 @@ func init() {
 	daemonCmd.Flags().BoolVar(&daemonMCPFlag, "mcp", false,
 		"Run as MCP server (JSON-RPC over stdio)")
 	daemonCmd.Flags().StringVar(&daemonDataDirFlag, "data-dir", "",
-		"Directory for session output files (default: ~/.shelli/data)")
+		"Directory for session output files (default: /tmp/shelli-{uid}/data)")
 	daemonCmd.Flags().BoolVar(&daemonMemoryBackend, "memory-backend", false,
 		"Use in-memory storage instead of file-based (no persistence)")
 	daemonCmd.Flags().StringVar(&daemonStoppedTTLFlag, "stopped-ttl", "",
@@ -68,11 +68,11 @@ func runDaemon(cmd *cobra.Command, args []string) error {
 	var opts []daemon.ServerOption
 
 	if daemonDataDirFlag == "" {
-		homeDir, err := os.UserHomeDir()
+		runtimeDir, err := daemon.RuntimeDir()
 		if err != nil {
-			return fmt.Errorf("get home dir: %w", err)
+			return fmt.Errorf("get runtime dir: %w", err)
 		}
-		daemonDataDirFlag = filepath.Join(homeDir, ".shelli", "data")
+		daemonDataDirFlag = filepath.Join(runtimeDir, "data")
 	}
 
 	if daemonMemoryBackend {
