@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/schovi/shelli/internal/ansi"
+	"github.com/schovi/shelli/internal/vterm"
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -97,21 +97,21 @@ func runSearch(cmd *cobra.Command, args []string) error {
 		for j, line := range match.Before {
 			display := line
 			if searchStripAnsiFlag {
-				display = ansi.Strip(line)
+				display = vterm.StripDefault(line)
 			}
 			fmt.Printf("%4d: %s\n", startLine+j, display)
 		}
 
 		display := match.Line
 		if searchStripAnsiFlag {
-			display = ansi.Strip(match.Line)
+			display = vterm.StripDefault(match.Line)
 		}
 		fmt.Printf(">%3d: %s\n", match.LineNumber, display)
 
 		for j, line := range match.After {
 			display := line
 			if searchStripAnsiFlag {
-				display = ansi.Strip(line)
+				display = vterm.StripDefault(line)
 			}
 			fmt.Printf("%4d: %s\n", match.LineNumber+1+j, display)
 		}

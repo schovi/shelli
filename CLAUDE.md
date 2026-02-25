@@ -44,11 +44,10 @@ shelli provides persistent interactive shell sessions via PTY-backed processes m
 - Commands: create, exec, send, read, list, stop, kill, search, cursor, version, daemon
 
 **Utilities** (`internal/`)
-- `wait/`: Output polling with settle-time and pattern-matching modes
-- `ansi/`: ANSI escape code stripping, TUI frame detection, terminal query responses (see `docs/TUI.md` for details)
-  - `strip.go`: ANSI escape code removal with rune-based virtual screen buffer supporting cursor positioning, relative movement (A/B/C/D), erase line (K), DEC Special Graphics charset, and newline-based grid sizing
-  - `clear.go`: `FrameDetector` for TUI mode (screen clear, sync mode, cursor home with cooldown, CursorJumpTop with look-ahead, size cap). Snapshot mode suppresses ALL truncation strategies.
-  - `responder.go`: `TerminalResponder` intercepts DA1/DA2/Kitty queries and writes responses to PTY
+- `wait/`: Output polling with settle-time and pattern-matching modes. Supports `FullOutput` flag for TUI sessions where output is full screen content rather than a growing buffer.
+- `vterm/`: VT terminal emulator wrapper using `charmbracelet/x/vt` (see `docs/TUI.md` for details)
+  - `screen.go`: `Screen` wraps a thread-safe VT emulator with atomic version counter and terminal query response bridge. Used for TUI sessions (replaces raw byte storage + frame detection + terminal responder).
+  - `strip.go`: ANSI escape code removal. Detects cursor positioning sequences and uses a temporary VT emulator for correct rendering; falls back to fast regex stripping for simple output.
 - `escape/`: Escape sequence interpretation for raw mode
 
 ### Data Flow
@@ -56,12 +55,19 @@ shelli provides persistent interactive shell sessions via PTY-backed processes m
 ```
 CLI/MCP → daemon.Client → Unix socket → daemon.Server → PTY → subprocess
                                               ↓
-                                        OutputStorage
-                                        ├─ MemoryStorage (default)
-                                        └─ FileStorage (persistent)
+                                    ┌─── TUI sessions ───┐
+                                    │  vterm.Screen       │
+                                    │  (VT emulator IS    │
+                                    │   the screen state) │
+                                    └─────────────────────┘
+                                    ┌─── Non-TUI sessions ┐
+                                    │  OutputStorage       │
+                                    │  ├─ MemoryStorage    │
+                                    │  └─ FileStorage      │
+                                    └──────────────────────┘
 ```
 
-PTY sessions accessible via both MCP and CLI, with optional size-based poll optimization. Additional endpoints: `size` (lightweight buffer size check for poll optimization)
+PTY sessions accessible via both MCP and CLI, with optional size-based poll optimization. Additional endpoints: `size` (returns version counter for TUI, byte count for non-TUI)
 
 ### Key Design Decisions
 
@@ -73,11 +79,11 @@ PTY sessions accessible via both MCP and CLI, with optional size-based poll opti
 - **Stop vs Kill**: `stop` terminates process but keeps output accessible; `kill` deletes everything
 - **Session states**: Sessions can be "running" or "stopped" with timestamp tracking
 - **TTL cleanup**: Optional auto-deletion of stopped sessions via `--stopped-ttl`
-- **TUI mode**: `--tui` flag enables frame detection with multiple strategies (screen clear, sync mode, cursor home, size cap) to auto-truncate buffer for TUI apps
-- **Snapshot read**: `--snapshot` on read clears storage and resets the frame detector, then triggers a resize cycle (SIGWINCH) to force a full TUI redraw, waits for settle, then reads the clean frame. Pre-clearing prevents races between captureOutput and the settle loop. Requires TUI mode.
-- **Terminal responder**: TUI sessions get a `TerminalResponder` that intercepts terminal capability queries (DA1, DA2, Kitty keyboard, DECRPM) in PTY output and writes responses to PTY input. Unblocks apps like yazi that block on unanswered queries.
-- **Per-consumer cursors**: Optional `cursor` parameter on read operations. Each named cursor tracks its own read position, allowing multiple consumers to tail the same session independently. Without a cursor, the global `ReadPos` is used (backward compatible).
-- **Size endpoint**: Lightweight `size` action returns output buffer size without transferring content. Used by wait polling to skip expensive full reads when nothing changed.
+- **TUI mode with VT emulator**: `--tui` flag creates a `vterm.Screen` (VT emulator) for the session. PTY output feeds the emulator directly; no raw byte storage needed. The emulator handles all cursor positioning, screen clearing, and character rendering natively. Reads return the current screen state via `Render()` (ANSI) or `String()` (plain text).
+- **VT emulator response bridge**: The emulator automatically handles terminal capability queries (DA1, DA2, DSR, etc.) and writes responses to its internal pipe. A `ReadResponses` goroutine bridges these to the PTY master, unblocking apps like yazi.
+- **Snapshot read**: `--snapshot` triggers a resize cycle (SIGWINCH) to force a full TUI redraw, waits for the emulator version to settle, then reads `screen.String()` (plain text). No storage clearing or frame detection needed.
+- **Per-consumer cursors**: Optional `cursor` parameter on read operations. Each named cursor tracks its own read position (byte offset for non-TUI, version counter for TUI), allowing multiple consumers to tail the same session independently. Without a cursor, the global `ReadPos` is used (backward compatible).
+- **Size endpoint**: Lightweight `size` action returns version counter (TUI) or buffer byte count (non-TUI). Used by wait polling to skip expensive full reads when nothing changed.
 
 ## Claude Plugin
 
@@ -93,7 +99,7 @@ Skills in `.claude/skills/`:
 - **Linting**: `.golangci.yml` - golangci-lint config with gosec, gocritic, revive
 - **CI/CD**: `.github/workflows/ci.yml` - lint, test, build, security on push/PR
 - **Releases**: `.goreleaser.yml` - multi-platform binaries, Homebrew tap update on tags
-- **Tests**: `internal/ansi/strip_test.go`, `internal/ansi/clear_test.go`, `internal/wait/wait_test.go`, `internal/daemon/limitlines_test.go`
+- **Tests**: `internal/vterm/strip_test.go`, `internal/vterm/screen_test.go`, `internal/wait/wait_test.go`, `internal/daemon/limitlines_test.go`
 - **Version**: `shelli version` - build info injected by goreleaser
 
 ## Documentation Sync Rules

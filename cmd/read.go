@@ -9,7 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/schovi/shelli/internal/ansi"
+	"github.com/schovi/shelli/internal/vterm"
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/schovi/shelli/internal/wait"
 	"github.com/spf13/cobra"
@@ -166,7 +166,7 @@ func runRead(cmd *cobra.Command, args []string) error {
 	}
 
 	if readStripAnsiFlag {
-		output = ansi.Strip(output)
+		output = vterm.StripDefault(output)
 	}
 
 	if readJsonFlag {
@@ -199,7 +199,7 @@ func runReadSnapshot(name string) error {
 	}
 
 	if readStripAnsiFlag {
-		output = ansi.Strip(output)
+		output = vterm.StripDefault(output)
 	}
 
 	if readJsonFlag {
@@ -253,7 +253,7 @@ func runReadFollow(name string) error {
 			}
 			if output != "" {
 				if readStripAnsiFlag {
-					output = ansi.Strip(output)
+					output = vterm.StripDefault(output)
 				}
 				fmt.Print(output)
 			}

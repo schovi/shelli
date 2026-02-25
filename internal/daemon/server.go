@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/schovi/shelli/internal/ansi"
+	"github.com/schovi/shelli/internal/vterm"
 )
 
 type ptyHandle struct {
@@ -52,11 +52,10 @@ type sessionHandle struct {
 	createdAt time.Time
 	stoppedAt *time.Time
 
-	pty           *ptyHandle
-	cmd           *exec.Cmd
-	done          chan struct{}
-	frameDetector *ansi.FrameDetector
-	responder     *ansi.TerminalResponder
+	pty    *ptyHandle
+	cmd    *exec.Cmd
+	done   chan struct{}
+	screen *vterm.Screen // non-nil for TUI sessions
 }
 
 type Server struct {
@@ -224,6 +223,9 @@ func (s *Server) cleanupExpiredSessions() {
 	for name, h := range s.handles {
 		if h.state == StateStopped && h.stoppedAt != nil {
 			if now.Sub(*h.stoppedAt) > s.stoppedTTL {
+				if h.screen != nil {
+					h.screen.Close()
+				}
 				s.storage.Delete(name)
 				delete(s.handles, name)
 			}
@@ -238,6 +240,9 @@ func (s *Server) Shutdown() {
 	close(s.cleanupStopChan)
 
 	for _, h := range s.handles {
+		if h.screen != nil {
+			h.screen.Close()
+		}
 		if h.state == StateRunning {
 			if h.done != nil {
 				close(h.done)
@@ -437,8 +442,8 @@ func (s *Server) handleCreate(req Request) Response {
 		done:      make(chan struct{}),
 	}
 	if req.TUIMode {
-		h.frameDetector = ansi.NewFrameDetector(ansi.DefaultTUIStrategy())
-		h.responder = ansi.NewTerminalResponder(ptmx)
+		h.screen = vterm.New(cols, rows)
+		go h.screen.ReadResponses(ptmx)
 	}
 
 	s.handles[req.Name] = h
@@ -466,8 +471,7 @@ func (s *Server) captureOutput(name string, h *sessionHandle) {
 	done := h.done
 	p := h.pty
 	cmd := h.cmd
-	detector := h.frameDetector
-	responder := h.responder
+	screen := h.screen
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -487,8 +491,7 @@ func (s *Server) captureOutput(name string, h *sessionHandle) {
 		h.pty = nil
 		h.cmd = nil
 		h.done = nil
-		h.frameDetector = nil
-		h.responder = nil
+		// screen stays alive for post-stop reads
 
 		h.state = StateStopped
 		now := time.Now()
@@ -500,14 +503,6 @@ func (s *Server) captureOutput(name string, h *sessionHandle) {
 			s.storage.SaveMeta(name, meta)
 		}
 	}()
-
-	if detector != nil {
-		defer func() {
-			if pending := detector.Flush(); len(pending) > 0 {
-				storage.Append(name, pending)
-			}
-		}()
-	}
 
 	buf := make([]byte, ReadBufferSize)
 	for {
@@ -521,17 +516,8 @@ func (s *Server) captureOutput(name string, h *sessionHandle) {
 		n, err := f.Read(buf)
 		if n > 0 {
 			data := buf[:n]
-			if responder != nil {
-				data = responder.Process(data)
-			}
-			if detector != nil {
-				result := detector.Process(data)
-				if result.Truncate {
-					storage.Clear(name)
-				}
-				if len(result.DataAfter) > 0 {
-					storage.Append(name, result.DataAfter)
-				}
+			if screen != nil {
+				screen.Write(data)
 			} else {
 				storage.Append(name, data)
 			}
@@ -587,8 +573,13 @@ func (s *Server) handleRead(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
 	sessState := h.state
+	screen := h.screen
 	storage := s.storage
 	s.mu.Unlock()
+
+	if screen != nil {
+		return s.handleReadTUI(req, h, screen)
+	}
 
 	meta, err := storage.LoadMeta(req.Name)
 	if err != nil {
@@ -658,6 +649,61 @@ func (s *Server) handleRead(req Request) Response {
 	}}
 }
 
+func (s *Server) handleReadTUI(req Request, h *sessionHandle, screen *vterm.Screen) Response {
+	meta, err := s.storage.LoadMeta(req.Name)
+	if err != nil {
+		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
+	}
+
+	mode := req.Mode
+	if mode == "" {
+		mode = ReadModeNew
+	}
+
+	var result string
+	currentVersion := int64(screen.Version()) // #nosec G115 -- version counter won't reach int64 max
+
+	switch mode {
+	case ReadModeNew:
+		readPos := meta.ReadPos
+		if req.Cursor != "" {
+			if meta.Cursors == nil {
+				readPos = 0
+			} else {
+				readPos = meta.Cursors[req.Cursor]
+			}
+		}
+
+		if readPos >= currentVersion {
+			result = ""
+		} else {
+			result = screen.Render()
+		}
+
+		if req.Cursor != "" {
+			if meta.Cursors == nil {
+				meta.Cursors = make(map[string]int64)
+			}
+			meta.Cursors[req.Cursor] = currentVersion
+		} else {
+			meta.ReadPos = currentVersion
+		}
+		s.storage.SaveMeta(req.Name, meta)
+	default:
+		result = screen.Render()
+	}
+
+	if req.HeadLines > 0 || req.TailLines > 0 {
+		result = LimitLines(result, req.HeadLines, req.TailLines)
+	}
+
+	return Response{Success: true, Data: map[string]interface{}{
+		"output":   result,
+		"position": currentVersion,
+		"state":    h.state,
+	}}
+}
+
 func LimitLines(output string, head, tail int) string {
 	if output == "" {
 		return ""
@@ -693,7 +739,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is not running (snapshot requires a running TUI session)", req.Name)}
 	}
-	if h.frameDetector == nil {
+	if h.screen == nil {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q is not in TUI mode (snapshot requires --tui)", req.Name)}
 	}
@@ -703,6 +749,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 	}
 	ptmx := h.pty.File()
 	cmd := h.cmd
+	screen := h.screen
 	storage := s.storage
 	s.mu.Unlock()
 
@@ -711,36 +758,22 @@ func (s *Server) handleSnapshot(req Request) Response {
 		return Response{Success: false, Error: fmt.Sprintf("load meta: %v", err)}
 	}
 
-	if sz, _ := storage.Size(req.Name); sz == 0 {
+	if screen.Version() == 0 {
 		coldDeadline := time.Now().Add(2 * time.Second)
 		for time.Now().Before(coldDeadline) {
 			time.Sleep(SnapshotPollInterval)
-			if sz, _ := storage.Size(req.Name); sz > 0 {
+			if screen.Version() > 0 {
 				break
 			}
 		}
 	}
-
-	storage.Clear(req.Name)
-	s.mu.Lock()
-	if h.frameDetector != nil {
-		h.frameDetector.Reset()
-		h.frameDetector.SetSnapshotMode(true)
-	}
-	s.mu.Unlock()
-	defer func() {
-		s.mu.Lock()
-		if h.frameDetector != nil {
-			h.frameDetector.SetSnapshotMode(false)
-		}
-		s.mu.Unlock()
-	}()
 
 	tempCols := clampUint16(meta.Cols + 1)
 	tempRows := clampUint16(meta.Rows + 1)
 	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: tempCols, Rows: tempRows}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("temporary resize for snapshot: %v", err)}
 	}
+	screen.Resize(int(tempCols), int(tempRows))
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Signal(syscall.SIGWINCH)
 	}
@@ -749,6 +782,7 @@ func (s *Server) handleSnapshot(req Request) Response {
 	if err := pty.Setsize(ptmx, &pty.Winsize{Cols: clampUint16(meta.Cols), Rows: clampUint16(meta.Rows)}); err != nil {
 		return Response{Success: false, Error: fmt.Sprintf("resize for snapshot: %v", err)}
 	}
+	screen.Resize(meta.Cols, meta.Rows)
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Signal(syscall.SIGWINCH)
 	}
@@ -768,41 +802,54 @@ func (s *Server) handleSnapshot(req Request) Response {
 	if timeout > maxTimeout {
 		timeout = maxTimeout
 	}
-
 	deadline := time.Now().Add(timeout)
 
-	if err := waitForSettle(storage, req.Name, settleDuration, deadline); err != nil {
-		return Response{Success: false, Error: fmt.Sprintf("poll size: %v", err)}
+	lastVersion := screen.Version()
+	lastChangeTime := time.Now()
+	for time.Now().Before(deadline) {
+		time.Sleep(SnapshotPollInterval)
+		v := screen.Version()
+		if v != lastVersion {
+			lastVersion = v
+			lastChangeTime = time.Now()
+			continue
+		}
+		if v > 0 && time.Since(lastChangeTime) >= settleDuration {
+			break
+		}
 	}
 
-	output, err := storage.ReadAll(req.Name)
-	if err != nil {
-		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
-	}
+	result := screen.String()
 
-	if len(output) == 0 && time.Now().Before(deadline) {
+	if len(result) == 0 && time.Now().Before(deadline) {
 		if cmd != nil && cmd.Process != nil {
 			cmd.Process.Signal(syscall.SIGWINCH)
 		}
-
-		waitForSettle(storage, req.Name, settleDuration*2, deadline)
-
-		output, err = storage.ReadAll(req.Name)
-		if err != nil {
-			return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+		lastVersion = screen.Version()
+		lastChangeTime = time.Now()
+		retrySettle := settleDuration * 2
+		for time.Now().Before(deadline) {
+			time.Sleep(SnapshotPollInterval)
+			v := screen.Version()
+			if v != lastVersion {
+				lastVersion = v
+				lastChangeTime = time.Now()
+				continue
+			}
+			if v > 0 && time.Since(lastChangeTime) >= retrySettle {
+				break
+			}
 		}
+		result = screen.String()
 	}
 
-	result := string(output)
 	if req.HeadLines > 0 || req.TailLines > 0 {
 		result = LimitLines(result, req.HeadLines, req.TailLines)
 	}
 
-	totalLen := int64(len(output))
-
 	return Response{Success: true, Data: map[string]interface{}{
 		"output":   result,
-		"position": totalLen,
+		"position": int64(screen.Version()), // #nosec G115 -- version counter won't reach int64 max
 		"state":    h.state,
 	}}
 }
@@ -869,8 +916,7 @@ func (s *Server) handleStop(req Request) Response {
 			proc.Signal(syscall.SIGKILL)
 		}()
 	}
-	h.frameDetector = nil
-	h.responder = nil
+	// screen stays alive for post-stop reads (emulator retains last screen state)
 
 	h.state = StateStopped
 	now := time.Now()
@@ -907,6 +953,9 @@ func (s *Server) handleKill(req Request) Response {
 		}
 	}
 
+	if h.screen != nil {
+		h.screen.Close()
+	}
 	s.storage.Delete(req.Name)
 	delete(s.handles, req.Name)
 	s.mu.Unlock()
@@ -924,10 +973,15 @@ func (s *Server) handleKill(req Request) Response {
 
 func (s *Server) handleSize(req Request) Response {
 	s.mu.Lock()
-	_, exists := s.handles[req.Name]
+	h, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
+	}
+	if h.screen != nil {
+		version := h.screen.Version()
+		s.mu.Unlock()
+		return Response{Success: true, Data: map[string]interface{}{"size": version}}
 	}
 	storage := s.storage
 	s.mu.Unlock()
@@ -945,22 +999,31 @@ func (s *Server) handleSearch(req Request) Response {
 	}
 
 	s.mu.Lock()
-	_, exists := s.handles[req.Name]
+	h, exists := s.handles[req.Name]
 	if !exists {
 		s.mu.Unlock()
 		return Response{Success: false, Error: fmt.Sprintf("session %q not found", req.Name)}
 	}
+	screen := h.screen
 	storage := s.storage
 	s.mu.Unlock()
 
-	outputBytes, err := storage.ReadAll(req.Name)
-	if err != nil {
-		return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
-	}
-
-	output := string(outputBytes)
-	if req.StripANSI {
-		output = ansi.Strip(output)
+	var output string
+	if screen != nil {
+		if req.StripANSI {
+			output = screen.String()
+		} else {
+			output = screen.Render()
+		}
+	} else {
+		outputBytes, err := storage.ReadAll(req.Name)
+		if err != nil {
+			return Response{Success: false, Error: fmt.Sprintf("read output: %v", err)}
+		}
+		output = string(outputBytes)
+		if req.StripANSI {
+			output = vterm.StripDefault(output)
+		}
 	}
 
 	patternStr := req.Pattern
@@ -1115,6 +1178,9 @@ func (s *Server) handleResize(req Request) Response {
 	}
 
 	s.mu.Lock()
+	if h.screen != nil {
+		h.screen.Resize(cols, rows)
+	}
 	if h.cmd != nil && h.cmd.Process != nil {
 		h.cmd.Process.Signal(syscall.SIGWINCH)
 	}
@@ -1130,27 +1196,6 @@ func (s *Server) handleResize(req Request) Response {
 		"cols": cols,
 		"rows": rows,
 	}}
-}
-
-func waitForSettle(storage OutputStorage, name string, settle time.Duration, deadline time.Time) error {
-	lastChangeTime := time.Now()
-	lastSize := int64(-1)
-	for time.Now().Before(deadline) {
-		time.Sleep(SnapshotPollInterval)
-		size, err := storage.Size(name)
-		if err != nil {
-			return err
-		}
-		if size != lastSize {
-			lastSize = size
-			lastChangeTime = time.Now()
-			continue
-		}
-		if size > 0 && time.Since(lastChangeTime) >= settle {
-			return nil
-		}
-	}
-	return nil
 }
 
 func clampUint16(v int) uint16 {

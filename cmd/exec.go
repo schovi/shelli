@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/schovi/shelli/internal/ansi"
+	"github.com/schovi/shelli/internal/vterm"
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/spf13/cobra"
 )
@@ -83,7 +83,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 
 	output := result.Output
 	if execStripAnsiFlag {
-		output = ansi.Strip(output)
+		output = vterm.StripDefault(output)
 	}
 
 	if execJsonFlag {

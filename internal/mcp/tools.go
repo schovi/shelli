@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/schovi/shelli/internal/ansi"
+	"github.com/schovi/shelli/internal/vterm"
 	"github.com/schovi/shelli/internal/daemon"
 	"github.com/schovi/shelli/internal/escape"
 	"github.com/schovi/shelli/internal/wait"
@@ -389,7 +389,7 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 		}
 		output := result.Output
 		if a.StripAnsi {
-			output = ansi.Strip(output)
+			output = vterm.StripDefault(output)
 		}
 		data, _ := json.MarshalIndent(map[string]interface{}{
 			"input":    result.Input,
@@ -405,7 +405,7 @@ func (r *ToolRegistry) callExec(args json.RawMessage) (*CallToolResult, error) {
 
 	output := result.Output
 	if a.StripAnsi {
-		output = ansi.Strip(output)
+		output = vterm.StripDefault(output)
 	}
 
 	data, _ := json.MarshalIndent(map[string]interface{}{
@@ -565,7 +565,7 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		}
 
 		if a.StripAnsi {
-			output = ansi.Strip(output)
+			output = vterm.StripDefault(output)
 		}
 
 		result := map[string]interface{}{
@@ -626,7 +626,7 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 		}
 
 		if a.StripAnsi {
-			output = ansi.Strip(output)
+			output = vterm.StripDefault(output)
 		}
 
 		result := map[string]interface{}{
@@ -656,7 +656,7 @@ func (r *ToolRegistry) callRead(args json.RawMessage) (*CallToolResult, error) {
 	}
 
 	if a.StripAnsi {
-		output = ansi.Strip(output)
+		output = vterm.StripDefault(output)
 	}
 
 	result := map[string]interface{}{
