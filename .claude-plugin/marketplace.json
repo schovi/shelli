@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace-manifest.json",
+  "name": "shelli",
+  "owner": {
+    "name": "David Schovanec"
+  },
+  "description": "Marketplace for shelli, persistent interactive shell sessions for AI workflows",
+  "plugins": [
+    {
+      "name": "shelli",
+      "source": "./.claude",
+      "description": "Persistent interactive shell sessions: skills, /shelli command, and the bundled shelli MCP server"
+    }
+  ]
+}

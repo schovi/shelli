@@ -1,0 +1,6 @@
+{
+  "shelli": {
+    "command": "shelli",
+    "args": ["daemon", "--mcp"]
+  }
+}

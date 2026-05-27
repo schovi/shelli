@@ -85,14 +85,24 @@ PTY sessions accessible via both MCP and CLI, with optional size-based poll opti
 - **Per-consumer cursors**: Optional `cursor` parameter on read operations. Each named cursor tracks its own read position (byte offset for non-TUI, version counter for TUI), allowing multiple consumers to tail the same session independently. Without a cursor, the global `ReadPos` is used (backward compatible).
 - **Size endpoint**: Lightweight `size` action returns version counter (TUI) or buffer byte count (non-TUI). Used by wait polling to skip expensive full reads when nothing changed.
 
-## Claude Plugin
+## Claude Plugin & Marketplace
 
-`.claude/.claude-plugin/` contains plugin metadata. The plugin teaches Claude when to use shelli (SSH, REPLs, databases, stateful workflows).
+This repo is both the shelli source and a Claude Code plugin marketplace.
 
-Skills in `.claude/skills/`:
-- `shelli/SKILL.md`: Full command reference
-- `shelli-auto-detector/SKILL.md`: Pattern detection for automatic usage
-- `tui-test/SKILL.md`: Automated TUI app testing protocol
+- `.claude-plugin/marketplace.json` (repo root): marketplace manifest. Lists one plugin, `shelli`, with `source: "./.claude"`.
+- `.claude/` is the **plugin root**. Install with `claude plugin install shelli@shelli` after adding the marketplace (`claude plugin marketplace add schovi/shelli`).
+
+Plugin contents (all paths relative to the plugin root `.claude/`):
+- `.claude-plugin/plugin.json`: plugin manifest. References the bundled MCP server via `"mcpServers": "./.mcp.json"`.
+- `.mcp.json`: bundled MCP server config. Runs `shelli daemon --mcp` (the `shelli` binary must be on `PATH`). Installing the plugin installs this MCP server too.
+- `commands/shelli.md`: the `/shelli` slash command.
+- `skills/`:
+  - `shelli/SKILL.md`: Full command reference
+  - `shelli-auto-detector/SKILL.md`: Pattern detection for automatic usage
+  - `tui-test/SKILL.md`: Automated TUI app testing protocol
+  - `release/SKILL.md`: Release notes workflow
+
+The plugin teaches Claude when to use shelli (SSH, REPLs, databases, stateful workflows) and provides native tool integration via the bundled MCP server.
 
 ## Tooling
 
