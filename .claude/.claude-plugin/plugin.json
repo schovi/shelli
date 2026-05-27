@@ -1,8 +1,14 @@
 {
-  "name": "shelli-claude",
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
+  "name": "shelli",
   "version": "0.2.0",
-  "description": "Persistent interactive shell sessions for AI workflows",
+  "description": "Persistent interactive shell sessions for AI workflows, with bundled MCP server",
   "author": {
     "name": "David Schovanec"
-  }
+  },
+  "homepage": "https://github.com/schovi/shelli",
+  "repository": "https://github.com/schovi/shelli",
+  "license": "MIT",
+  "keywords": ["shell", "pty", "mcp", "ssh", "repl", "tui"],
+  "mcpServers": "./.mcp.json"
 }
