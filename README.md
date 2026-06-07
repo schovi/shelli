@@ -42,25 +42,64 @@ make build
 
 ## Claude Code Integration
 
-shelli integrates with Claude Code as a **plugin** (teaches Claude when and how to use shelli) that **bundles the MCP server** (native tool integration). Installing the plugin sets up both at once.
+shelli ships as a single **Claude Code plugin**. Installing it gives Claude two things at once:
 
-> The `shelli` binary must be installed and on your `PATH` first (see [Installation](#installation)). The plugin's MCP server runs `shelli daemon --mcp`.
+- **Skills + the `/shelli` command** that teach Claude *when* to use a persistent session (SSH, REPLs, databases, long-running or stateful workflows) and *how* to drive one.
+- **The `shelli` MCP server**, which provides the tools Claude actually calls. The plugin bundles it, so there is **no separate MCP setup** to do.
 
-### Install via Marketplace (recommended)
+> **Prerequisite:** install the `shelli` binary first (see [Installation](#installation)) and make sure it is on your `PATH`. The MCP server is just `shelli daemon --mcp`, so the plugin can only connect once the binary is found.
 
-This repo is a Claude Code plugin marketplace. Add it and install the plugin:
+### 1. Install the plugin
+
+This repository doubles as a Claude Code plugin marketplace. Run these inside Claude Code:
 
 ```bash
+# Register this repo as a marketplace (one time)
 claude plugin marketplace add schovi/shelli
+
+# Install the plugin, which also installs its bundled MCP server
 claude plugin install shelli@shelli
 ```
 
-That single plugin installs:
-- **Skills**: when/how to use persistent sessions (core, auto-detector, TUI testing)
-- **`/shelli` command**: explicit entry point for forcing shelli usage
-- **MCP server `shelli`**: native tool integration (started as `shelli daemon --mcp`)
+`shelli@shelli` reads as "the `shelli` plugin from the `shelli` marketplace". You can also browse and install interactively with the `/plugin` command.
 
-To share with a team, commit the marketplace and enable the plugin in your project's `.claude/settings.json`:
+### 2. Verify it connected
+
+Restart Claude Code (or run `/reload-plugins`), then check the MCP server is live:
+
+```bash
+claude mcp list
+```
+
+You should see:
+
+```
+plugin:shelli:shelli: shelli daemon --mcp - ✓ Connected
+```
+
+If it reports an error instead, the `shelli` binary is most likely not on your `PATH`.
+
+### MCP tools
+
+Once connected, Claude can call these operations:
+
+| Tool | Description |
+|------|-------------|
+| `create` | Create a new session |
+| `exec` | Send input and wait for output (primary tool) |
+| `send` | Send input without waiting |
+| `read` | Read session output |
+| `search` | Search output buffer with regex |
+| `list` | List all sessions |
+| `info` | Get detailed session info |
+| `clear` | Clear output buffer |
+| `resize` | Change terminal dimensions |
+| `stop` | Stop session, keep output accessible |
+| `kill` | Stop and delete session |
+
+### Team setup
+
+To enable shelli for an entire project, commit this to the project's `.claude/settings.json`. Teammates get the marketplace and plugin automatically:
 
 ```json
 {
@@ -75,9 +114,9 @@ To share with a team, commit the marketplace and enable the plugin in your proje
 }
 ```
 
-### MCP Server Only (manual)
+### Alternative: MCP server without the plugin
 
-If you only want the MCP tools without the plugin, add the server to `~/.claude/settings.json`:
+If you want only the MCP tools and not the skills or `/shelli` command, skip the plugin and register the server directly in `~/.claude/settings.json`:
 
 ```json
 {
@@ -90,35 +129,17 @@ If you only want the MCP tools without the plugin, add the server to `~/.claude/
 }
 ```
 
-The server exposes these MCP tools to Claude:
-- `shelli/create` - Create a new session
-- `shelli/exec` - Send input and wait for output (primary tool)
-- `shelli/send` - Send input without waiting
-- `shelli/read` - Read session output
-- `shelli/search` - Search output buffer with regex
-- `shelli/list` - List all sessions
-- `shelli/info` - Get detailed session info
-- `shelli/clear` - Clear output buffer
-- `shelli/resize` - Change terminal dimensions
-- `shelli/stop` - Stop session, keep output accessible
-- `shelli/kill` - Stop and delete session
+This exposes the same tools listed above, but Claude won't have the guidance about when to reach for them.
 
-With the plugin installed, Claude will:
-1. Automatically detect when persistent sessions are needed
-2. Use MCP tools for structured interaction
-3. Handle session lifecycle (create, use, cleanup)
-
-### Example Interaction
+### Example interactions
 
 ```
 User: "SSH to server.example.com and check disk usage"
-
 Claude: [creates SSH session via MCP, waits for prompt, runs df -h]
 ```
 
 ```
 User: "Start Python and help me explore this CSV"
-
 Claude: [creates python3 session, imports pandas, loads file interactively]
 ```
 
